@@ -6,4 +6,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     CUDABackend = None
 
-__all__ = ["DeviceBackend", "NullBackend", "CUDABackend"]
+try:
+    from .rocm_backend import ROCmBackend
+except Exception:  # pragma: no cover - optional dependency
+    ROCmBackend = None
+
+__all__ = ["CUDABackend", "DeviceBackend", "NullBackend", "ROCmBackend"]

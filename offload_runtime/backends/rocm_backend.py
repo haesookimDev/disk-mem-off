@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import ctypes
+from typing import Any
+
+from .base import DeviceBackend
+from offload_runtime.types import DeviceBuffer, HostBuffer
+
+try:
+    from hip import hip as hiprt  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    hiprt = None
+
+
+def _check(result: tuple[Any, ...]) -> Any:
+    """Check HIP runtime call result."""
+    status, *rest = result
+    if int(status) != 0:
+        raise RuntimeError(f"HIP runtime call failed with status={int(status)}")
+    if not rest:
+        return None
+    if len(rest) == 1:
+        return rest[0]
+    return tuple(rest)
+
+
+def _ptr_from_writable_view(view: memoryview) -> int:
+    if view.readonly:
+        raise ValueError("HostBuffer.view must be writable for async hipMemcpyAsync.")
+    return ctypes.addressof(ctypes.c_char.from_buffer(view))
+
+
+class ROCmBackend(DeviceBackend):
+    """Low-level ROCm adapter using hip-python runtime bindings.
+
+    HIP API mirrors CUDA nearly 1:1:
+    - hipMalloc = cudaMalloc
+    - hipFree = cudaFree
+    - hipMemcpyAsync = cudaMemcpyAsync
+    - hipStreamCreate = cudaStreamCreate
+    - hipEventCreate = cudaEventCreate
+    """
+
+    name = "rocm"
+
+    def __init__(self, device_id: int = 0) -> None:
+        if hiprt is None:
+            raise RuntimeError("hip-python is not installed; cannot initialize ROCmBackend")
+        _check(hiprt.hipSetDevice(device_id))
+
+    @property
+    def supports_pinned_host(self) -> bool:
+        return True
+
+    @property
+    def supports_peer_to_peer(self) -> bool:
+        return True
+
+    @property
+    def supports_graph_capture(self) -> bool:
+        return True
+
+    def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
+        host_ptr = _check(hiprt.hipHostMalloc(nbytes, 0))
+        arr = (ctypes.c_byte * nbytes).from_address(host_ptr)
+        return HostBuffer(view=memoryview(arr), pinned=True)
+
+    def free_pinned_host(self, buf: HostBuffer) -> None:
+        ptr = ctypes.addressof(ctypes.c_char.from_buffer(buf.view))
+        _check(hiprt.hipHostFree(ptr))
+
+    def create_stream(self, purpose: str) -> Any:
+        _ = purpose
+        # hipStreamNonBlocking = 1
+        stream = _check(hiprt.hipStreamCreateWithFlags(1))
+        return stream
+
+    def destroy_stream(self, stream: Any) -> None:
+        _check(hiprt.hipStreamDestroy(stream))
+
+    def alloc_device(self, nbytes: int) -> DeviceBuffer:
+        dev_ptr = _check(hiprt.hipMalloc(nbytes))
+        return DeviceBuffer(handle=dev_ptr, nbytes=nbytes, backend=self.name)
+
+    def free_device(self, buf: DeviceBuffer) -> None:
+        _check(hiprt.hipFree(buf.handle))
+
+    def copy_h2d_async(self, dst: DeviceBuffer, src: HostBuffer, stream: Any) -> None:
+        if src.nbytes < dst.nbytes:
+            raise ValueError(
+                f"Host buffer ({src.nbytes}B) smaller than device buffer ({dst.nbytes}B)"
+            )
+        src_ptr = _ptr_from_writable_view(src.view)
+        # hipMemcpyHostToDevice = 1
+        _check(hiprt.hipMemcpyAsync(dst.handle, src_ptr, dst.nbytes, 1, stream))
+
+    def copy_d2h_async(self, dst: HostBuffer, src: DeviceBuffer, stream: Any) -> None:
+        if dst.nbytes < src.nbytes:
+            raise ValueError(
+                f"Host buffer ({dst.nbytes}B) smaller than device buffer ({src.nbytes}B)"
+            )
+        dst_ptr = _ptr_from_writable_view(dst.view)
+        # hipMemcpyDeviceToHost = 2
+        _check(hiprt.hipMemcpyAsync(dst_ptr, src.handle, src.nbytes, 2, stream))
+
+    def record_event(self, stream: Any) -> Any:
+        # hipEventDisableTiming = 2
+        event = _check(hiprt.hipEventCreateWithFlags(2))
+        _check(hiprt.hipEventRecord(event, stream))
+        return event
+
+    def destroy_event(self, event: Any) -> None:
+        _check(hiprt.hipEventDestroy(event))
+
+    def wait_event(self, stream: Any, event: Any) -> None:
+        _check(hiprt.hipStreamWaitEvent(stream, event, 0))
+
+    def synchronize_stream(self, stream: Any) -> None:
+        _check(hiprt.hipStreamSynchronize(stream))
