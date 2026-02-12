@@ -12,18 +12,76 @@ wheels = [
 ]
 
 [[package]]
+name = "cuda-bindings"
+version = "13.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cuda-pathfinder" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/38/40416d037ed25db68f1dbd50e0232775a62d90c9f25af22b196c0a13b88c/cuda_bindings-13.1.1-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:86258fe1b0d3998bea7f57dc891569e4996705b8dd00366e44c722d0a29b2090", size = 15498927, upload-time = "2025-12-09T22:06:09.476Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/3f/f1f88b6cdb7d41ba076f8ff10edf6d3bd17e740da9a163544b43d6349653/cuda_bindings-13.1.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:daf8468fd603b2724c2d16cbd499348c64916ed72b1d04643f1660ce13cd12ae", size = 15984539, upload-time = "2025-12-09T22:06:11.882Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/33/7739cc5e9a3373df8e7dea9060528bee5f70cf6e28b9c14f765502816c71/cuda_bindings-13.1.1-cp314-cp314-win_amd64.whl", hash = "sha256:f2e079182014dbc162562b46467815272c14c7afe5b988978fa968728b0ac726", size = 15373212, upload-time = "2025-12-09T22:06:13.989Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/0a/5c6d514e566ff86c4054bbbb6554bf49b9c55fefbc934eb456faecab53c9/cuda_bindings-13.1.1-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d0cd96a6ec00a78235947bff9462b2139bc5b83ce8e297d865802f0b52d1e23d", size = 15403944, upload-time = "2025-12-09T22:06:16.315Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/5b/319cfa491a685d4d4757aa24223b6dbc0976954afac42f49fc47290ba6a3/cuda_bindings-13.1.1-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9ff465829c6c394c2b4047250324a19925cf8c44633345b2746a4741e07bf827", size = 15911462, upload-time = "2025-12-09T22:06:18.403Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/5c/38b92080c5b6c4ddb09f0be2536123f81c7e9e1a89e4573f20cb00347ee3/cuda_bindings-13.1.1-cp314-cp314t-win_amd64.whl", hash = "sha256:8205eee6b8b458a2110c0384923ace206855d0f1b436fc1b145fcbaa1653b501", size = 16044390, upload-time = "2025-12-09T22:06:20.945Z" },
+]
+
+[[package]]
+name = "cuda-pathfinder"
+version = "1.3.4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/5e/db279a3bfbd18d59d0598922a3b3c1454908d0969e8372260afec9736376/cuda_pathfinder-1.3.4-py3-none-any.whl", hash = "sha256:fb983f6e0d43af27ef486e14d5989b5f904ef45cedf40538bfdcbffa6bb01fb2", size = 30878, upload-time = "2026-02-11T18:50:31.008Z" },
+]
+
+[[package]]
+name = "cuda-python"
+version = "13.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cuda-bindings" },
+    { name = "cuda-pathfinder" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/08/b5e3b9822662d72d540d830531e3ab6a7cabbda3dd56175696aabccfeb76/cuda_python-13.1.1-py3-none-any.whl", hash = "sha256:944cc4fe6482673d28dd545797a28840945a1668739328fa2ad1e9be4f7050d9", size = 8038, upload-time = "2025-12-09T22:13:10.719Z" },
+]
+
+[[package]]
 name = "disk-mem-off"
 version = "0.1.0"
 source = { virtual = "." }
 
 [package.optional-dependencies]
+cuda = [
+    { name = "cuda-python" },
+]
 dev = [
     { name = "pytest" },
 ]
+mps = [
+    { name = "pyobjc-framework-metal" },
+]
+rocm = [
+    { name = "hip-python" },
+]
 
 [package.metadata]
-requires-dist = [{ name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" }]
-provides-extras = ["dev"]
+requires-dist = [
+    { name = "cuda-python", marker = "extra == 'cuda'" },
+    { name = "hip-python", marker = "extra == 'rocm'" },
+    { name = "pyobjc-framework-metal", marker = "extra == 'mps'" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+]
+provides-extras = ["dev", "cuda", "rocm", "mps"]
+
+[[package]]
+name = "hip-python"
+version = "0.0.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/c3/f6e43b436b999002893547ee0381f1d5ca9bf689106cd8fea0c4ffd4eae7/hip_python-0.0.2-py3-none-any.whl", hash = "sha256:eca910bc3b960999c68c18e3a76a3b12ebcdfd481e5f2a3182c791717a85373a", size = 1437, upload-time = "2025-11-06T18:03:34.489Z" },
+]
 
 [[package]]
 name = "iniconfig"
@@ -59,6 +117,43 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pyobjc-core"
+version = "12.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/b6/d5612eb40be4fd5ef88c259339e6313f46ba67577a95d86c3470b951fce0/pyobjc_core-12.1.tar.gz", hash = "sha256:2bb3903f5387f72422145e1466b3ac3f7f0ef2e9960afa9bcd8961c5cbf8bd21", size = 1000532, upload-time = "2025-11-14T10:08:28.292Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/98/9f4ed07162de69603144ff480be35cd021808faa7f730d082b92f7ebf2b5/pyobjc_core-12.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:844515f5d86395b979d02152576e7dee9cc679acc0b32dc626ef5bda315eaa43", size = 670164, upload-time = "2025-11-14T09:34:37.458Z" },
+    { url = "https://files.pythonhosted.org/packages/62/50/dc076965c96c7f0de25c0a32b7f8aa98133ed244deaeeacfc758783f1f30/pyobjc_core-12.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:453b191df1a4b80e756445b935491b974714456ae2cbae816840bd96f86db882", size = 712204, upload-time = "2025-11-14T09:35:24.148Z" },
+]
+
+[[package]]
+name = "pyobjc-framework-cocoa"
+version = "12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyobjc-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/02/a3/16ca9a15e77c061a9250afbae2eae26f2e1579eb8ca9462ae2d2c71e1169/pyobjc_framework_cocoa-12.1.tar.gz", hash = "sha256:5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640", size = 2772191, upload-time = "2025-11-14T10:13:02.069Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/bb/f777cc9e775fc7dae77b569254570fe46eb842516b3e4fe383ab49eab598/pyobjc_framework_cocoa-12.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:03342a60fc0015bcdf9b93ac0b4f457d3938e9ef761b28df9564c91a14f0129a", size = 384932, upload-time = "2025-11-14T09:42:29.771Z" },
+    { url = "https://files.pythonhosted.org/packages/58/27/b457b7b37089cad692c8aada90119162dfb4c4a16f513b79a8b2b022b33b/pyobjc_framework_cocoa-12.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:6ba1dc1bfa4da42d04e93d2363491275fb2e2be5c20790e561c8a9e09b8cf2cc", size = 388970, upload-time = "2025-11-14T09:42:53.964Z" },
+]
+
+[[package]]
+name = "pyobjc-framework-metal"
+version = "12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyobjc-core" },
+    { name = "pyobjc-framework-cocoa" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/06/a84f7eb8561d5631954b9458cfca04b690b80b5b85ce70642bc89335f52a/pyobjc_framework_metal-12.1.tar.gz", hash = "sha256:bb554877d5ee2bf3f340ad88e8fe1b85baab7b5ec4bd6ae0f4f7604147e3eae7", size = 181847, upload-time = "2025-11-14T10:17:34.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/8a/890dbc66bdae2ec839e28a15f16696ed1ab34b3cf32d58ed4dcd76183f25/pyobjc_framework_metal-12.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:2440db9b7057b6bafbabe8a2c5dde044865569176058ee34a7d138df0fc96c8c", size = 75876, upload-time = "2025-11-14T09:55:24.905Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/73/df12913fa33b52ff0e2c3cb7d578849a198b2a141d6e07e8930856a40851/pyobjc_framework_metal-12.1-cp314-cp314t-macosx_10_15_universal2.whl", hash = "sha256:476eeba3bebc2b3010e352b6bd28e3732432a3d5a8d5c3fb1cebd257dc7ea41e", size = 76483, upload-time = "2025-11-14T09:55:30.656Z" },
 ]
 
 [[package]]
