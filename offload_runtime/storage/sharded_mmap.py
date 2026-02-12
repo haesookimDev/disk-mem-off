@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import gc
 import json
 import mmap
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from offload_runtime.types import HostBuffer
 
@@ -32,6 +34,12 @@ class ShardedMMapStorage:
         self._entries = self._load_index(self.index_path)
         self._files: dict[str, object] = {}
         self._maps: dict[str, mmap.mmap] = {}
+
+    def __enter__(self) -> "ShardedMMapStorage":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _load_index(self, index_path: Path) -> dict[int, LayerEntry]:
         raw = json.loads(index_path.read_text(encoding="utf-8"))
@@ -64,17 +72,17 @@ class ShardedMMapStorage:
     def get(self, layer_id: int) -> HostBuffer:
         entry = self._entries[layer_id]
         mm = self._mmap_for(entry.path)
-        view = memoryview(mm)[entry.offset : entry.offset + entry.nbytes]
-        return HostBuffer(view=view, pinned=False)
+        data = bytes(mm[entry.offset : entry.offset + entry.nbytes])
+        return HostBuffer(view=memoryview(data), pinned=False)
 
     def release(self, layer_id: int) -> None:
         _ = layer_id
 
     def close(self) -> None:
+        gc.collect()
         for mm in self._maps.values():
             mm.close()
         for fp in self._files.values():
             fp.close()
         self._maps.clear()
         self._files.clear()
-
