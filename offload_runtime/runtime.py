@@ -60,6 +60,10 @@ class OffloadRuntime:
         self.backend.destroy_stream(self.compute_stream)
 
     def run_inference(self, ordered_layer_ids: list[int], inputs: Any) -> tuple[Any, RuntimeMetrics]:
+        unknown = [lid for lid in ordered_layer_ids if lid not in self.layers]
+        if unknown:
+            raise ValueError(f"Unknown layer IDs: {unknown}")
+
         metrics = RuntimeMetrics(layer_count=len(ordered_layer_ids))
         activations = inputs
 

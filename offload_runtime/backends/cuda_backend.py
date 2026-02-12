@@ -59,24 +59,32 @@ class CUDABackend(DeviceBackend):
         _check(cudart.cudaFree(buf.handle))
 
     def copy_h2d_async(self, dst: DeviceBuffer, src: HostBuffer, stream: Any) -> None:
+        if src.nbytes < dst.nbytes:
+            raise ValueError(
+                f"Host buffer ({src.nbytes}B) smaller than device buffer ({dst.nbytes}B)"
+            )
         src_ptr = _ptr_from_writable_view(src.view)
         _check(
             cudart.cudaMemcpyAsync(
                 dst.handle,
                 src_ptr,
-                min(dst.nbytes, src.nbytes),
+                dst.nbytes,
                 cudart.cudaMemcpyKind.cudaMemcpyHostToDevice,
                 stream,
             )
         )
 
     def copy_d2h_async(self, dst: HostBuffer, src: DeviceBuffer, stream: Any) -> None:
+        if dst.nbytes < src.nbytes:
+            raise ValueError(
+                f"Host buffer ({dst.nbytes}B) smaller than device buffer ({src.nbytes}B)"
+            )
         dst_ptr = _ptr_from_writable_view(dst.view)
         _check(
             cudart.cudaMemcpyAsync(
                 dst_ptr,
                 src.handle,
-                min(dst.nbytes, src.nbytes),
+                src.nbytes,
                 cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost,
                 stream,
             )
