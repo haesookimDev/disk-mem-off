@@ -33,11 +33,13 @@ class LayerMetrics:
     compute_ms: float = 0.0
     stall_ms: float = 0.0
     nbytes: int = 0
+    compressed_nbytes: int = 0
 
 
 @dataclass(slots=True)
 class RuntimeMetrics:
     transferred_bytes: int = 0
+    compressed_bytes: int = 0
     transfer_seconds: float = 0.0
     compute_seconds: float = 0.0
     layer_count: int = 0
@@ -68,6 +70,7 @@ class OffloadRuntime:
         executor: LayerExecutor,
         use_buffer_pool: bool = False,
         use_pinned_staging: bool = False,
+        dequantizer: Any | None = None,
     ) -> None:
         self.layers = {layer.layer_id: layer for layer in layers}
         self.backend = backend
@@ -80,6 +83,7 @@ class OffloadRuntime:
         self._pinned_pool: PinnedHostBufferPool | None = None
         if use_pinned_staging and backend.supports_pinned_host:
             self._pinned_pool = PinnedHostBufferPool(backend)
+        self.dequantizer = dequantizer
 
     def __enter__(self) -> "OffloadRuntime":
         return self
@@ -127,15 +131,22 @@ class OffloadRuntime:
 
         for index, layer_id in enumerate(ordered_layer_ids):
             layer = self.layers[layer_id]
-            lm = LayerMetrics(layer_id=layer_id, nbytes=layer.nbytes)
+            lm = LayerMetrics(layer_id=layer_id)
 
             t_stall = time.perf_counter()
             self.storage.wait(layer_id)
             host_weights = self.storage.get(layer_id)
             lm.stall_ms = (time.perf_counter() - t_stall) * 1000
 
+            if self.dequantizer is not None and self.dequantizer.needs_dequantize(layer):
+                compressed_size = host_weights.nbytes
+                host_weights = self.dequantizer.dequantize(layer, host_weights)
+                lm.compressed_nbytes = compressed_size
+                metrics.compressed_bytes += compressed_size
+
+            actual_nbytes = host_weights.nbytes
             staged = self._stage_pinned(host_weights)
-            device_weights = self._alloc_device(layer.nbytes)
+            device_weights = self._alloc_device(actual_nbytes)
 
             t0 = time.perf_counter()
             self.backend.copy_h2d_async(device_weights, staged, self.transfer_stream)
@@ -144,8 +155,9 @@ class OffloadRuntime:
             self.backend.destroy_event(transfer_event)
             h2d_elapsed = time.perf_counter() - t0
             lm.h2d_ms = h2d_elapsed * 1000
+            lm.nbytes = actual_nbytes
             metrics.transfer_seconds += h2d_elapsed
-            metrics.transferred_bytes += layer.nbytes
+            metrics.transferred_bytes += actual_nbytes
 
             t1 = time.perf_counter()
             activations = self.executor.run_layer(

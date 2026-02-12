@@ -305,3 +305,82 @@ class TestOffloadRuntime:
         ) as runtime:
             out, _ = runtime.run_inference([0, 1], inputs=0)
             assert out == 1
+
+    def test_quantized_transfer_int8(self) -> None:
+        import struct
+        from offload_runtime.quantize import Int8Dequantizer
+
+        # 4 bytes of int8 data per layer -> 16 bytes float32 after dequant
+        layers = [
+            LayerSpec(layer_id=0, name="L0", nbytes=4, metadata={"dtype": "int8", "scale": 1.0}),
+            LayerSpec(layer_id=1, name="L1", nbytes=4, metadata={"dtype": "int8", "scale": 1.0}),
+        ]
+        storage = InMemoryStorage({
+            0: struct.pack("4b", 1, 2, 3, 4),
+            1: struct.pack("4b", 5, 6, 7, 8),
+        })
+        runtime = OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            dequantizer=Int8Dequantizer(),
+        )
+        out, metrics = runtime.run_inference([0, 1], inputs=0)
+        assert out == 0 + 1  # SumExecutor adds layer_id
+        assert metrics.layer_count == 2
+        # transferred_bytes = decompressed size (16 bytes * 2 layers)
+        assert metrics.transferred_bytes == 32
+        # compressed_bytes = original int8 size (4 bytes * 2 layers)
+        assert metrics.compressed_bytes == 8
+        # per-layer metrics
+        assert metrics.layer_metrics[0].compressed_nbytes == 4
+        assert metrics.layer_metrics[0].nbytes == 16
+        assert metrics.layer_metrics[1].compressed_nbytes == 4
+
+    def test_quantized_transfer_no_dequantizer(self) -> None:
+        # Without dequantizer, metadata is ignored
+        layers = [
+            LayerSpec(layer_id=0, name="L0", nbytes=16, metadata={"dtype": "int8", "scale": 1.0}),
+        ]
+        storage = _make_storage_simple(1)
+        runtime = OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+        )
+        out, metrics = runtime.run_inference([0], inputs=0)
+        assert out == 0
+        assert metrics.transferred_bytes == 16
+        assert metrics.compressed_bytes == 0
+
+    def test_quantized_mixed_layers(self) -> None:
+        import struct
+        from offload_runtime.quantize import CompositeDequantizer
+
+        layers = [
+            LayerSpec(layer_id=0, name="L0", nbytes=16),  # non-quantized
+            LayerSpec(layer_id=1, name="L1", nbytes=4, metadata={"dtype": "int8", "scale": 1.0}),
+        ]
+        storage = InMemoryStorage({
+            0: b"\x00" * 16,
+            1: struct.pack("4b", 1, 2, 3, 4),
+        })
+        runtime = OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            dequantizer=CompositeDequantizer(),
+        )
+        out, metrics = runtime.run_inference([0, 1], inputs=0)
+        assert out == 0 + 1
+        # Layer 0: 16 bytes (not quantized), Layer 1: 16 bytes (decompressed from 4)
+        assert metrics.transferred_bytes == 32
+        assert metrics.compressed_bytes == 4  # only layer 1
+        assert metrics.layer_metrics[0].compressed_nbytes == 0
+        assert metrics.layer_metrics[1].compressed_nbytes == 4
