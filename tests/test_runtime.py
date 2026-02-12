@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from offload_runtime.backends.null_backend import NullBackend
-from offload_runtime.runtime import OffloadRuntime, RuntimeMetrics
+from offload_runtime.runtime import LayerMetrics, OffloadRuntime, RuntimeMetrics
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
 from offload_runtime.storage.in_memory import InMemoryStorage
 from offload_runtime.types import DeviceBuffer, LayerSpec
