@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from offload_runtime.backends.base import DeviceBackend
@@ -25,11 +25,35 @@ class LayerExecutor(Protocol):
 
 
 @dataclass(slots=True)
+class LayerMetrics:
+    layer_id: int
+    h2d_ms: float = 0.0
+    compute_ms: float = 0.0
+    stall_ms: float = 0.0
+    nbytes: int = 0
+
+
+@dataclass(slots=True)
 class RuntimeMetrics:
     transferred_bytes: int = 0
     transfer_seconds: float = 0.0
     compute_seconds: float = 0.0
     layer_count: int = 0
+    end_to_end_seconds: float = 0.0
+    layer_metrics: list[LayerMetrics] = field(default_factory=list)
+
+    @property
+    def effective_bandwidth_gbps(self) -> float:
+        if self.transfer_seconds <= 0:
+            return 0.0
+        return (self.transferred_bytes / 1e9) / self.transfer_seconds
+
+    @property
+    def overlap_ratio(self) -> float:
+        total = self.transfer_seconds + self.compute_seconds
+        if total <= 0 or self.end_to_end_seconds <= 0:
+            return 0.0
+        return 1.0 - (self.end_to_end_seconds / total)
 
 
 class OffloadRuntime:
@@ -66,15 +90,19 @@ class OffloadRuntime:
 
         metrics = RuntimeMetrics(layer_count=len(ordered_layer_ids))
         activations = inputs
+        wall_start = time.perf_counter()
 
         for layer_id in self.scheduler.warmup_prefetch_ids(ordered_layer_ids):
             self.storage.request(layer_id)
 
         for index, layer_id in enumerate(ordered_layer_ids):
             layer = self.layers[layer_id]
+            lm = LayerMetrics(layer_id=layer_id, nbytes=layer.nbytes)
 
+            t_stall = time.perf_counter()
             self.storage.wait(layer_id)
             host_weights = self.storage.get(layer_id)
+            lm.stall_ms = (time.perf_counter() - t_stall) * 1000
 
             device_weights = self.backend.alloc_device(layer.nbytes)
 
@@ -83,7 +111,9 @@ class OffloadRuntime:
             transfer_event = self.backend.record_event(self.transfer_stream)
             self.backend.wait_event(self.compute_stream, transfer_event)
             self.backend.destroy_event(transfer_event)
-            metrics.transfer_seconds += time.perf_counter() - t0
+            h2d_elapsed = time.perf_counter() - t0
+            lm.h2d_ms = h2d_elapsed * 1000
+            metrics.transfer_seconds += h2d_elapsed
             metrics.transferred_bytes += layer.nbytes
 
             t1 = time.perf_counter()
@@ -94,10 +124,14 @@ class OffloadRuntime:
                 backend=self.backend,
                 stream=self.compute_stream,
             )
-            metrics.compute_seconds += time.perf_counter() - t1
+            compute_elapsed = time.perf_counter() - t1
+            lm.compute_ms = compute_elapsed * 1000
+            metrics.compute_seconds += compute_elapsed
 
             self.backend.free_device(device_weights)
             self.storage.release(layer_id)
+
+            metrics.layer_metrics.append(lm)
 
             next_layer_id = self.scheduler.next_prefetch_id(ordered_layer_ids, index)
             if next_layer_id is not None:
@@ -105,5 +139,5 @@ class OffloadRuntime:
 
         self.backend.synchronize_stream(self.transfer_stream)
         self.backend.synchronize_stream(self.compute_stream)
+        metrics.end_to_end_seconds = time.perf_counter() - wall_start
         return activations, metrics
-
