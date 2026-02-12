@@ -5,6 +5,7 @@ from typing import Any
 from offload_runtime.backends.null_backend import NullBackend
 from offload_runtime.runtime import OffloadRuntime
 from offload_runtime.scheduler.block_scheduler import BlockScheduler
+from offload_runtime.scheduler.cost_aware import CostAwareScheduler
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
 from offload_runtime.storage.in_memory import InMemoryStorage
 from offload_runtime.types import DeviceBuffer, LayerSpec
@@ -83,3 +84,32 @@ class TestSchedulerProtocol:
             out, _ = runtime.run_inference([0, 1, 2, 3], inputs=0)
             assert out == 6
         assert len(backend._buffers) == 0
+
+    def test_runtime_accepts_cost_aware_scheduler(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=1, max_lookahead=3)
+        runtime = OffloadRuntime(
+            layers=_make_layers(5),
+            backend=NullBackend(),
+            storage=_make_storage(5),
+            scheduler=sched,
+            executor=SumExecutor(),
+        )
+        out, metrics = runtime.run_inference([0, 1, 2, 3, 4], inputs=0)
+        assert out == 10
+        assert metrics.layer_count == 5
+
+    def test_cost_aware_scheduler_adapts_after_feed(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=1, max_lookahead=4)
+        runtime = OffloadRuntime(
+            layers=_make_layers(5),
+            backend=NullBackend(),
+            storage=_make_storage(5),
+            scheduler=sched,
+            executor=SumExecutor(),
+        )
+        # First run: cold start
+        _, metrics1 = runtime.run_inference([0, 1, 2, 3, 4], inputs=0)
+        sched.feed_metrics(metrics1.layer_metrics)
+        # Second run: scheduler now has cost data
+        _, metrics2 = runtime.run_inference([0, 1, 2, 3, 4], inputs=0)
+        assert metrics2.layer_count == 5
