@@ -35,6 +35,16 @@ class DeviceBackend(ABC):
     def supports_pinned_host(self) -> bool:
         return False
 
+    @property
+    def supports_peer_to_peer(self) -> bool:
+        """Whether the backend supports direct GPU-to-GPU transfers."""
+        return False
+
+    @property
+    def supports_graph_capture(self) -> bool:
+        """Whether the backend supports graph capture/replay for reducing launch overhead."""
+        return False
+
     def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
         raise NotImplementedError(f"{self.name} does not support pinned host memory")
 

@@ -46,6 +46,14 @@ class CUDABackend(DeviceBackend):
     def supports_pinned_host(self) -> bool:
         return True
 
+    @property
+    def supports_peer_to_peer(self) -> bool:
+        return True
+
+    @property
+    def supports_graph_capture(self) -> bool:
+        return True
+
     def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
         host_ptr = _check(cudart.cudaMallocHost(nbytes))
         arr = (ctypes.c_byte * nbytes).from_address(host_ptr)

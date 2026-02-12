@@ -19,6 +19,14 @@ class NullBackend(DeviceBackend):
     def supports_pinned_host(self) -> bool:
         return True
 
+    @property
+    def supports_peer_to_peer(self) -> bool:
+        return False
+
+    @property
+    def supports_graph_capture(self) -> bool:
+        return False
+
     def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
         buf = bytearray(nbytes)
         self._pinned.add(id(buf))

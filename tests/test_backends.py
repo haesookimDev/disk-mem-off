@@ -63,6 +63,21 @@ class TestNullBackend:
         stream = self.backend.create_stream("s")
         self.backend.synchronize_stream(stream)  # should not raise
 
+    def test_capability_flags(self) -> None:
+        assert self.backend.supports_pinned_host is True
+        assert self.backend.supports_peer_to_peer is False
+        assert self.backend.supports_graph_capture is False
+
+    def test_custom_backend_capability_override(self) -> None:
+        class P2PBackend(NullBackend):
+            @property
+            def supports_peer_to_peer(self) -> bool:
+                return True
+
+        b = P2PBackend()
+        assert b.supports_peer_to_peer is True
+        assert b.supports_graph_capture is False  # inherited default
+
     def test_h2d_partial_copy_smaller_src(self) -> None:
         data = bytearray(b"abcd")
         src = HostBuffer(view=memoryview(data), pinned=False)
