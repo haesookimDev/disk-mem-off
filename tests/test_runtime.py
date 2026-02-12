@@ -168,3 +168,63 @@ class TestOffloadRuntime:
         ) as runtime:
             out, _ = runtime.run_inference([0, 1], inputs=0)
             assert out == 1
+
+    def test_per_layer_metrics(self) -> None:
+        layers = _make_layers(3, nbytes=32)
+        storage = _make_storage_simple(3, nbytes=32)
+        runtime = OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+        )
+        _, metrics = runtime.run_inference([0, 1, 2], inputs=0)
+
+        assert len(metrics.layer_metrics) == 3
+        for i, lm in enumerate(metrics.layer_metrics):
+            assert lm.layer_id == i
+            assert lm.nbytes == 32
+            assert lm.h2d_ms >= 0.0
+            assert lm.compute_ms >= 0.0
+            assert lm.stall_ms >= 0.0
+
+    def test_end_to_end_seconds(self) -> None:
+        layers = _make_layers(2)
+        storage = _make_storage_simple(2)
+        runtime = OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+        )
+        _, metrics = runtime.run_inference([0, 1], inputs=0)
+        assert metrics.end_to_end_seconds > 0.0
+
+    def test_effective_bandwidth(self) -> None:
+        metrics = RuntimeMetrics(
+            transferred_bytes=1_000_000_000,
+            transfer_seconds=1.0,
+        )
+        assert metrics.effective_bandwidth_gbps == pytest.approx(1.0)
+
+    def test_effective_bandwidth_zero_time(self) -> None:
+        metrics = RuntimeMetrics(transferred_bytes=100, transfer_seconds=0.0)
+        assert metrics.effective_bandwidth_gbps == 0.0
+
+    def test_overlap_ratio_no_overlap(self) -> None:
+        metrics = RuntimeMetrics(
+            transfer_seconds=1.0,
+            compute_seconds=1.0,
+            end_to_end_seconds=2.0,
+        )
+        assert metrics.overlap_ratio == pytest.approx(0.0)
+
+    def test_overlap_ratio_full_overlap(self) -> None:
+        metrics = RuntimeMetrics(
+            transfer_seconds=1.0,
+            compute_seconds=1.0,
+            end_to_end_seconds=1.0,
+        )
+        assert metrics.overlap_ratio == pytest.approx(0.5)
