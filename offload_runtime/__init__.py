@@ -15,6 +15,19 @@ from .storage import InMemoryStorage, LayerStorage, ShardedMMapStorage
 from .training import TrainingExecutor, TrainingLayerMetrics, TrainingMetrics, TrainingRuntime
 from .types import DeviceBuffer, HostBuffer, LayerSpec, LoRASpec
 
+try:
+    from .executor_np import GPT2Executor, LlamaExecutor
+except Exception:  # pragma: no cover - optional dependency
+    GPT2Executor = None
+    LlamaExecutor = None
+
+try:
+    from .loader import HuggingFaceLoader, ModelBundle, SafetensorsStorage
+except Exception:  # pragma: no cover - optional dependency
+    HuggingFaceLoader = None
+    ModelBundle = None
+    SafetensorsStorage = None
+
 __all__ = [
     "BlockScheduler",
     "CompositeDequantizer",
@@ -25,15 +38,19 @@ __all__ = [
     "DeviceBuffer",
     "DeviceBufferPool",
     "Float16Dequantizer",
+    "GPT2Executor",
     "HostBuffer",
+    "HuggingFaceLoader",
     "InMemoryStorage",
     "Int8Dequantizer",
     "LayerExecutor",
     "LayerMetrics",
     "LayerSpec",
     "LayerStorage",
+    "LlamaExecutor",
     "LoRASpec",
     "LookaheadScheduler",
+    "ModelBundle",
     "MPSBackend",
     "NullBackend",
     "OffloadRuntime",
@@ -43,6 +60,7 @@ __all__ = [
     "ReverseLookaheadScheduler",
     "ROCmBackend",
     "RuntimeMetrics",
+    "SafetensorsStorage",
     "ShardedMMapStorage",
     "TrainingExecutor",
     "TrainingLayerMetrics",

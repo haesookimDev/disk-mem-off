@@ -4,13 +4,17 @@ import offload_runtime
 
 
 class TestExports:
-    # Backends that may be None due to missing optional dependencies
-    _optional_backends = {"CUDABackend", "ROCmBackend", "MPSBackend"}
+    # Symbols that may be None due to missing optional dependencies
+    _optional_exports = {
+        "CUDABackend", "ROCmBackend", "MPSBackend",
+        "GPT2Executor", "LlamaExecutor",
+        "HuggingFaceLoader", "ModelBundle", "SafetensorsStorage",
+    }
 
     def test_all_names_importable(self) -> None:
         for name in offload_runtime.__all__:
             attr = getattr(offload_runtime, name, None)
-            if name in self._optional_backends:
+            if name in self._optional_exports:
                 continue
             assert attr is not None, f"{name} is not importable from offload_runtime"
 
@@ -29,15 +33,19 @@ class TestExports:
             "DeviceBuffer",
             "DeviceBufferPool",
             "Float16Dequantizer",
+            "GPT2Executor",
             "HostBuffer",
+            "HuggingFaceLoader",
             "InMemoryStorage",
             "Int8Dequantizer",
             "LayerExecutor",
             "LayerMetrics",
             "LayerSpec",
             "LayerStorage",
+            "LlamaExecutor",
             "LoRASpec",
             "LookaheadScheduler",
+            "ModelBundle",
             "MPSBackend",
             "NullBackend",
             "OffloadRuntime",
@@ -47,6 +55,7 @@ class TestExports:
             "ReverseLookaheadScheduler",
             "ROCmBackend",
             "RuntimeMetrics",
+            "SafetensorsStorage",
             "ShardedMMapStorage",
             "TrainingExecutor",
             "TrainingLayerMetrics",
