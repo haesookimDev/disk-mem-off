@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from offload_runtime.backends import ROCmBackend
+from offload_runtime.backends.rocm_backend import hiprt as _hiprt
+
+_has_hip = _hiprt is not None
 
 
 class TestROCmBackendStructure:
@@ -15,8 +18,14 @@ class TestROCmBackendStructure:
         from offload_runtime.backends import rocm_backend
         assert hasattr(rocm_backend, "ROCmBackend")
 
+    def test_init_raises_without_hip(self) -> None:
+        if _has_hip:
+            pytest.skip("hip-python is available")
+        with pytest.raises(RuntimeError, match="hip-python is not installed"):
+            ROCmBackend()
 
-@pytest.mark.skipif(ROCmBackend is None, reason="hip-python not available")
+
+@pytest.mark.skipif(not _has_hip, reason="hip-python not available")
 class TestROCmBackend:
     def setup_method(self) -> None:
         self.backend = ROCmBackend(device_id=0)
