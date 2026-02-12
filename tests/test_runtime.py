@@ -125,7 +125,7 @@ class TestOffloadRuntime:
             scheduler=LookaheadScheduler(lookahead=1),
             executor=SumExecutor(),
         )
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match="Unknown layer IDs"):
             runtime.run_inference([0, 1, 99], inputs=0)
 
     def test_different_lookahead_values(self) -> None:
