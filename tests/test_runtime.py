@@ -228,3 +228,29 @@ class TestOffloadRuntime:
             end_to_end_seconds=1.0,
         )
         assert metrics.overlap_ratio == pytest.approx(0.5)
+
+    def test_buffer_pool_reuses_buffers(self) -> None:
+        backend = NullBackend()
+        layers = _make_layers(3)
+        storage = _make_storage_simple(3)
+        with OffloadRuntime(
+            layers=layers,
+            backend=backend,
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            use_buffer_pool=True,
+        ) as runtime:
+            out, metrics = runtime.run_inference([0, 1, 2], inputs=0)
+            assert out == 3
+            assert metrics.layer_count == 3
+        # After close(), pool drained, backend should be empty
+        assert len(backend._buffers) == 0
+
+    def test_pinned_memory_alloc_free(self) -> None:
+        backend = NullBackend()
+        assert backend.supports_pinned_host is True
+        buf = backend.alloc_pinned_host(64)
+        assert buf.pinned is True
+        assert buf.nbytes == 64
+        backend.free_pinned_host(buf)
