@@ -6,9 +6,10 @@ from typing import Any, Protocol
 
 from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.buffer_pool import DeviceBufferPool
+from offload_runtime.pinned_pool import PinnedHostBufferPool
 from offload_runtime.scheduler.base import PrefetchScheduler
 from offload_runtime.storage.base import LayerStorage
-from offload_runtime.types import DeviceBuffer, LayerSpec
+from offload_runtime.types import DeviceBuffer, HostBuffer, LayerSpec
 
 
 class LayerExecutor(Protocol):
@@ -66,6 +67,7 @@ class OffloadRuntime:
         scheduler: PrefetchScheduler,
         executor: LayerExecutor,
         use_buffer_pool: bool = False,
+        use_pinned_staging: bool = False,
     ) -> None:
         self.layers = {layer.layer_id: layer for layer in layers}
         self.backend = backend
@@ -75,6 +77,9 @@ class OffloadRuntime:
         self.transfer_stream = backend.create_stream("transfer")
         self.compute_stream = backend.create_stream("compute")
         self._pool = DeviceBufferPool(backend) if use_buffer_pool else None
+        self._pinned_pool: PinnedHostBufferPool | None = None
+        if use_pinned_staging and backend.supports_pinned_host:
+            self._pinned_pool = PinnedHostBufferPool(backend)
 
     def __enter__(self) -> "OffloadRuntime":
         return self
@@ -83,6 +88,8 @@ class OffloadRuntime:
         self.close()
 
     def close(self) -> None:
+        if self._pinned_pool is not None:
+            self._pinned_pool.drain()
         if self._pool is not None:
             self._pool.drain()
         self.backend.destroy_stream(self.transfer_stream)
@@ -98,6 +105,13 @@ class OffloadRuntime:
             self._pool.release(buf)
         else:
             self.backend.free_device(buf)
+
+    def _stage_pinned(self, host_weights: HostBuffer) -> HostBuffer:
+        if self._pinned_pool is None or host_weights.pinned:
+            return host_weights
+        pinned = self._pinned_pool.acquire(host_weights.nbytes)
+        pinned.view[: host_weights.nbytes] = host_weights.view[: host_weights.nbytes]
+        return pinned
 
     def run_inference(self, ordered_layer_ids: list[int], inputs: Any) -> tuple[Any, RuntimeMetrics]:
         unknown = [lid for lid in ordered_layer_ids if lid not in self.layers]
@@ -120,10 +134,11 @@ class OffloadRuntime:
             host_weights = self.storage.get(layer_id)
             lm.stall_ms = (time.perf_counter() - t_stall) * 1000
 
+            staged = self._stage_pinned(host_weights)
             device_weights = self._alloc_device(layer.nbytes)
 
             t0 = time.perf_counter()
-            self.backend.copy_h2d_async(device_weights, host_weights, self.transfer_stream)
+            self.backend.copy_h2d_async(device_weights, staged, self.transfer_stream)
             transfer_event = self.backend.record_event(self.transfer_stream)
             self.backend.wait_event(self.compute_stream, transfer_event)
             self.backend.destroy_event(transfer_event)
@@ -146,6 +161,8 @@ class OffloadRuntime:
 
             self._free_device(device_weights)
             self.storage.release(layer_id)
+            if staged is not host_weights and self._pinned_pool is not None:
+                self._pinned_pool.release(staged)
 
             metrics.layer_metrics.append(lm)
 

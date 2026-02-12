@@ -254,3 +254,54 @@ class TestOffloadRuntime:
         assert buf.pinned is True
         assert buf.nbytes == 64
         backend.free_pinned_host(buf)
+
+    def test_pinned_staging_inference(self) -> None:
+        layers = _make_layers(3)
+        storage = _make_storage_simple(3)
+        with OffloadRuntime(
+            layers=layers,
+            backend=NullBackend(),
+            storage=storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            use_pinned_staging=True,
+        ) as runtime:
+            out, metrics = runtime.run_inference([0, 1, 2], inputs=0)
+            assert out == 3
+            assert metrics.layer_count == 3
+            assert metrics.transferred_bytes == 48
+
+    def test_pinned_staging_with_buffer_pool(self) -> None:
+        backend = NullBackend()
+        with OffloadRuntime(
+            layers=_make_layers(3),
+            backend=backend,
+            storage=_make_storage_simple(3),
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            use_buffer_pool=True,
+            use_pinned_staging=True,
+        ) as runtime:
+            out, _ = runtime.run_inference([0, 1, 2], inputs=0)
+            assert out == 3
+        assert len(backend._buffers) == 0
+
+    def test_pinned_staging_skipped_when_unsupported(self) -> None:
+        from offload_runtime.backends.base import DeviceBackend
+        from offload_runtime.types import HostBuffer
+
+        class NoPinnedBackend(NullBackend):
+            @property
+            def supports_pinned_host(self) -> bool:
+                return False
+
+        with OffloadRuntime(
+            layers=_make_layers(2),
+            backend=NoPinnedBackend(),
+            storage=_make_storage_simple(2),
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=SumExecutor(),
+            use_pinned_staging=True,  # should degrade gracefully
+        ) as runtime:
+            out, _ = runtime.run_inference([0, 1], inputs=0)
+            assert out == 1
