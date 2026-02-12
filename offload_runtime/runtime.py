@@ -49,6 +49,16 @@ class OffloadRuntime:
         self.transfer_stream = backend.create_stream("transfer")
         self.compute_stream = backend.create_stream("compute")
 
+    def __enter__(self) -> "OffloadRuntime":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.backend.destroy_stream(self.transfer_stream)
+        self.backend.destroy_stream(self.compute_stream)
+
     def run_inference(self, ordered_layer_ids: list[int], inputs: Any) -> tuple[Any, RuntimeMetrics]:
         metrics = RuntimeMetrics(layer_count=len(ordered_layer_ids))
         activations = inputs
