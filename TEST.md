@@ -35,3 +35,13 @@ GPT-2 small	~500MB	가장 가볍고 검증 용이
 TinyLlama-1.1B	~2.2GB	VRAM 제한 시나리오 테스트에 적합
 Llama-2-7B	~14GB	실제 오프로딩이 필요한 현실적 케이스
 하지만 이 모델들을 사용하려면 safetensors/GGUF → shard format 변환기와 실제 LayerExecutor 구현이 먼저 필요합니다.
+
+All 5 phases are now complete. Here's a summary of what was fixed:
+
+offload_runtime/__init__.py — Removed orphaned duplicate __all__ list content (lines 70-101) that would have caused a SyntaxError.
+
+tests/test_exports.py — Updated to match the new public API:
+
+Renamed _optional_backends → _optional_exports to include all 8 optional symbols (3 backends + 5 inference symbols)
+Added GPT2Executor, LlamaExecutor, HuggingFaceLoader, ModelBundle, SafetensorsStorage to the expected set (34 → 39 symbols)
+Final test results: 190 passed, 15 skipped (up from 140 passed previously — 50 new tests from the inference implementation).
