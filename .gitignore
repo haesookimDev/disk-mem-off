@@ -10,3 +10,8 @@ __pycache__/
 .idea/
 .vscode/
 *.log
+
+*.egg-info/
+dist/
+build/
+.eggs/
