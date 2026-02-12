@@ -88,6 +88,9 @@ class CUDABackend(DeviceBackend):
         _check(cudart.cudaEventRecord(event, stream))
         return event
 
+    def destroy_event(self, event: Any) -> None:
+        _check(cudart.cudaEventDestroy(event))
+
     def wait_event(self, stream: Any, event: Any) -> None:
         _check(cudart.cudaStreamWaitEvent(stream, event, 0))
 

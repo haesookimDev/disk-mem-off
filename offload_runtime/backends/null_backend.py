@@ -40,9 +40,12 @@ class NullBackend(DeviceBackend):
         source = self._buffers[int(src.handle)]
         dst.view[: len(source)] = source
 
-    def record_event(self, stream: Any) -> None:
+    def record_event(self, stream: Any) -> Any:
         _ = stream
-        return None
+        return object()
+
+    def destroy_event(self, event: Any) -> None:
+        _ = event
 
     def wait_event(self, stream: Any, event: Any) -> None:
         _ = (stream, event)

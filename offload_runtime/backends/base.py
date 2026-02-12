@@ -44,6 +44,10 @@ class DeviceBackend(ABC):
         pass
 
     @abstractmethod
+    def destroy_event(self, event: Any) -> None:
+        pass
+
+    @abstractmethod
     def wait_event(self, stream: Any, event: Any) -> None:
         pass
 
