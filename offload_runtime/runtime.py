@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.buffer_pool import DeviceBufferPool
-from offload_runtime.scheduler.lookahead import LookaheadScheduler
+from offload_runtime.scheduler.base import PrefetchScheduler
 from offload_runtime.storage.base import LayerStorage
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
@@ -63,7 +63,7 @@ class OffloadRuntime:
         layers: list[LayerSpec],
         backend: DeviceBackend,
         storage: LayerStorage,
-        scheduler: LookaheadScheduler,
+        scheduler: PrefetchScheduler,
         executor: LayerExecutor,
         use_buffer_pool: bool = False,
     ) -> None:

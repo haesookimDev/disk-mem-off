@@ -1,5 +1,6 @@
+from .base import PrefetchScheduler
 from .block_scheduler import BlockScheduler
 from .lookahead import LookaheadScheduler
 
-__all__ = ["BlockScheduler", "LookaheadScheduler"]
+__all__ = ["BlockScheduler", "LookaheadScheduler", "PrefetchScheduler"]
 
