@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from offload_runtime.backends.base import DeviceBackend
+from offload_runtime.buffer_pool import DeviceBufferPool
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
 from offload_runtime.storage.base import LayerStorage
 from offload_runtime.types import DeviceBuffer, LayerSpec
@@ -64,6 +65,7 @@ class OffloadRuntime:
         storage: LayerStorage,
         scheduler: LookaheadScheduler,
         executor: LayerExecutor,
+        use_buffer_pool: bool = False,
     ) -> None:
         self.layers = {layer.layer_id: layer for layer in layers}
         self.backend = backend
@@ -72,6 +74,7 @@ class OffloadRuntime:
         self.executor = executor
         self.transfer_stream = backend.create_stream("transfer")
         self.compute_stream = backend.create_stream("compute")
+        self._pool = DeviceBufferPool(backend) if use_buffer_pool else None
 
     def __enter__(self) -> "OffloadRuntime":
         return self
@@ -80,8 +83,21 @@ class OffloadRuntime:
         self.close()
 
     def close(self) -> None:
+        if self._pool is not None:
+            self._pool.drain()
         self.backend.destroy_stream(self.transfer_stream)
         self.backend.destroy_stream(self.compute_stream)
+
+    def _alloc_device(self, nbytes: int) -> DeviceBuffer:
+        if self._pool is not None:
+            return self._pool.acquire(nbytes)
+        return self.backend.alloc_device(nbytes)
+
+    def _free_device(self, buf: DeviceBuffer) -> None:
+        if self._pool is not None:
+            self._pool.release(buf)
+        else:
+            self.backend.free_device(buf)
 
     def run_inference(self, ordered_layer_ids: list[int], inputs: Any) -> tuple[Any, RuntimeMetrics]:
         unknown = [lid for lid in ordered_layer_ids if lid not in self.layers]
@@ -104,7 +120,7 @@ class OffloadRuntime:
             host_weights = self.storage.get(layer_id)
             lm.stall_ms = (time.perf_counter() - t_stall) * 1000
 
-            device_weights = self.backend.alloc_device(layer.nbytes)
+            device_weights = self._alloc_device(layer.nbytes)
 
             t0 = time.perf_counter()
             self.backend.copy_h2d_async(device_weights, host_weights, self.transfer_stream)
@@ -128,7 +144,7 @@ class OffloadRuntime:
             lm.compute_ms = compute_elapsed * 1000
             metrics.compute_seconds += compute_elapsed
 
-            self.backend.free_device(device_weights)
+            self._free_device(device_weights)
             self.storage.release(layer_id)
 
             metrics.layer_metrics.append(lm)
