@@ -13,6 +13,19 @@ class NullBackend(DeviceBackend):
 
     def __init__(self) -> None:
         self._buffers: dict[int, bytearray] = {}
+        self._pinned: set[int] = set()
+
+    @property
+    def supports_pinned_host(self) -> bool:
+        return True
+
+    def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
+        buf = bytearray(nbytes)
+        self._pinned.add(id(buf))
+        return HostBuffer(view=memoryview(buf), pinned=True)
+
+    def free_pinned_host(self, buf: HostBuffer) -> None:
+        self._pinned.discard(id(buf.view.obj))
 
     def create_stream(self, purpose: str) -> object:
         return object()

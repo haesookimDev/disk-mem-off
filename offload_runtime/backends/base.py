@@ -31,6 +31,16 @@ class DeviceBackend(ABC):
     def free_device(self, buf: DeviceBuffer) -> None:
         pass
 
+    @property
+    def supports_pinned_host(self) -> bool:
+        return False
+
+    def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
+        raise NotImplementedError(f"{self.name} does not support pinned host memory")
+
+    def free_pinned_host(self, buf: HostBuffer) -> None:
+        raise NotImplementedError(f"{self.name} does not support pinned host memory")
+
     @abstractmethod
     def copy_h2d_async(self, dst: DeviceBuffer, src: HostBuffer, stream: Any) -> None:
         pass

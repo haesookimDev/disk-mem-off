@@ -42,6 +42,19 @@ class CUDABackend(DeviceBackend):
             raise RuntimeError("cuda-python is not installed; cannot initialize CUDABackend")
         _check(cudart.cudaSetDevice(device_id))
 
+    @property
+    def supports_pinned_host(self) -> bool:
+        return True
+
+    def alloc_pinned_host(self, nbytes: int) -> HostBuffer:
+        host_ptr = _check(cudart.cudaMallocHost(nbytes))
+        arr = (ctypes.c_byte * nbytes).from_address(host_ptr)
+        return HostBuffer(view=memoryview(arr), pinned=True)
+
+    def free_pinned_host(self, buf: HostBuffer) -> None:
+        ptr = ctypes.addressof(ctypes.c_char.from_buffer(buf.view))
+        _check(cudart.cudaFreeHost(ptr))
+
     def create_stream(self, purpose: str) -> Any:
         _ = purpose
         # cudaStreamNonBlocking = 1
