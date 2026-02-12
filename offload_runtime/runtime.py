@@ -78,6 +78,7 @@ class OffloadRuntime:
             self.backend.copy_h2d_async(device_weights, host_weights, self.transfer_stream)
             transfer_event = self.backend.record_event(self.transfer_stream)
             self.backend.wait_event(self.compute_stream, transfer_event)
+            self.backend.destroy_event(transfer_event)
             metrics.transfer_seconds += time.perf_counter() - t0
             metrics.transferred_bytes += layer.nbytes
 
