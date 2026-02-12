@@ -11,4 +11,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     ROCmBackend = None
 
-__all__ = ["CUDABackend", "DeviceBackend", "NullBackend", "ROCmBackend"]
+try:
+    from .mps_backend import MPSBackend
+except Exception:  # pragma: no cover - optional dependency
+    MPSBackend = None
+
+__all__ = ["CUDABackend", "DeviceBackend", "MPSBackend", "NullBackend", "ROCmBackend"]
