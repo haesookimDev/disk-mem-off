@@ -28,3 +28,14 @@ class DeviceBuffer:
     nbytes: int
     backend: str
 
+
+@dataclass(frozen=True, slots=True)
+class LoRASpec:
+    """Describes a LoRA adapter pair for a layer."""
+
+    layer_id: int
+    rank: int
+    lora_a_nbytes: int
+    lora_b_nbytes: int
+    alpha: float = 1.0
+
