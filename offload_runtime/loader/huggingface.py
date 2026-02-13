@@ -35,6 +35,7 @@ _SUPPORTED_ARCHITECTURES: dict[str, str] = {
     "GPT2LMHeadModel": "gpt2",
     "LlamaForCausalLM": "llama",
     "Glm4ForCausalLM": "glm4",
+    "Glm4MoeForCausalLM": "glm4_moe",
 }
 
 # Canonical tensor order within a transformer block.
