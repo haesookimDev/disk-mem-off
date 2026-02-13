@@ -384,6 +384,48 @@ class HuggingFaceLoader:
         return layers, embed_names, head_names
 
     @classmethod
+    def _group_glm4(
+        cls,
+        config: dict[str, Any],
+        tensor_info: dict[str, dict[str, Any]],
+        compute_dtype: str,
+    ) -> tuple[list[LayerSpec], list[str], list[str]]:
+        n_layer = config["num_hidden_layers"]
+        layers: list[LayerSpec] = []
+
+        for i in range(n_layer):
+            prefix = f"model.layers.{i}."
+            meta_list: list[dict[str, Any]] = []
+            offset = 0
+
+            for short_name in _GLM4_LAYER_TENSORS:
+                full_name = prefix + short_name
+                if full_name not in tensor_info:
+                    continue
+                shape = tensor_info[full_name]["shape"]
+                nbytes = cls._compute_nbytes(shape, compute_dtype)
+                meta_list.append({
+                    "name": short_name,
+                    "shape": shape,
+                    "dtype": compute_dtype,
+                    "offset": offset,
+                    "nbytes": nbytes,
+                })
+                offset += nbytes
+
+            layers.append(LayerSpec(
+                layer_id=i,
+                name=f"model.layers.{i}",
+                nbytes=offset,
+                metadata={"tensors": meta_list, "full_prefix": prefix},
+            ))
+
+        embed_names = ["model.embed_tokens.weight"]
+        head_names = [n for n in tensor_info if n == "model.norm.weight" or n == "lm_head.weight"]
+
+        return layers, embed_names, head_names
+
+    @classmethod
     def _load_weights(
         cls,
         tensor_names: list[str],
