@@ -25,7 +25,7 @@ except ImportError:
     Tokenizer = None
 
 from offload_runtime.backends.null_backend import NullBackend
-from offload_runtime.executor_np import GLM4Executor, GPT2Executor, LlamaExecutor
+from offload_runtime.executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
 from offload_runtime.loader.huggingface import HuggingFaceLoader
 from offload_runtime.runtime import OffloadRuntime
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
@@ -59,6 +59,8 @@ def main() -> None:
         executor = LlamaExecutor(bundle.config)
     elif bundle.architecture == "glm4":
         executor = GLM4Executor(bundle.config)
+    elif bundle.architecture == "glm4_moe":
+        executor = GLM4MoeExecutor(bundle.config)
     else:
         sys.exit(f"Unsupported architecture: {bundle.architecture}")
 
