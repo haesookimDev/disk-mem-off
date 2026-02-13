@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(not _has_deps, reason="inference deps not instal
 
 if _has_deps:
     from offload_runtime.backends.null_backend import NullBackend
-    from offload_runtime.executor_np import GLM4Executor, GPT2Executor, LlamaExecutor
+    from offload_runtime.executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
     from offload_runtime.loader.huggingface import HuggingFaceLoader
     from offload_runtime.runtime import OffloadRuntime
     from offload_runtime.scheduler.lookahead import LookaheadScheduler
