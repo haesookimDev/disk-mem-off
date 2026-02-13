@@ -72,6 +72,20 @@ _GLM4_LAYER_TENSORS = [
     "post_mlp_layernorm.weight",
 ]
 
+# GLM-4 MoE: dense layers (first_k_dense_replace) use this static list.
+_GLM4_MOE_DENSE_LAYER_TENSORS = [
+    "input_layernorm.weight",
+    "self_attn.q_proj.weight", "self_attn.q_proj.bias",
+    "self_attn.k_proj.weight", "self_attn.k_proj.bias",
+    "self_attn.v_proj.weight", "self_attn.v_proj.bias",
+    "self_attn.q_norm.weight", "self_attn.k_norm.weight",
+    "self_attn.o_proj.weight",
+    "post_attention_layernorm.weight",
+    "mlp.gate_proj.weight",
+    "mlp.up_proj.weight",
+    "mlp.down_proj.weight",
+]
+
 
 @dataclass(slots=True)
 class ModelBundle:
