@@ -34,6 +34,7 @@ _DTYPE_ITEMSIZE: dict[str, int] = {
 _SUPPORTED_ARCHITECTURES: dict[str, str] = {
     "GPT2LMHeadModel": "gpt2",
     "LlamaForCausalLM": "llama",
+    "Glm4ForCausalLM": "glm4",
 }
 
 # Canonical tensor order within a transformer block.
@@ -56,6 +57,18 @@ _LLAMA_LAYER_TENSORS = [
     "mlp.gate_proj.weight",
     "mlp.up_proj.weight",
     "mlp.down_proj.weight",
+]
+
+_GLM4_LAYER_TENSORS = [
+    "input_layernorm.weight",
+    "self_attn.q_proj.weight", "self_attn.q_proj.bias",
+    "self_attn.k_proj.weight", "self_attn.k_proj.bias",
+    "self_attn.v_proj.weight", "self_attn.v_proj.bias",
+    "self_attn.o_proj.weight", "self_attn.o_proj.bias",
+    "post_attention_layernorm.weight",
+    "mlp.gate_up_proj.weight",
+    "mlp.down_proj.weight",
+    "post_mlp_layernorm.weight",
 ]
 
 
@@ -112,6 +125,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_gpt2(config, tensor_info, compute_dtype)
         elif architecture == "llama":
             layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
+        elif architecture == "glm4":
+            layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -122,7 +137,7 @@ class HuggingFaceLoader:
         # Handle weight tying
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture == "llama" and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         # Find tokenizer
@@ -178,6 +193,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_gpt2(config, tensor_info, compute_dtype)
         elif architecture == "llama":
             layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
+        elif architecture == "glm4":
+            layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -186,7 +203,7 @@ class HuggingFaceLoader:
 
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture == "llama" and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         tokenizer_path: Path | None = None
