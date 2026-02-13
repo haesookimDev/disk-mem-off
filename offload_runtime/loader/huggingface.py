@@ -142,6 +142,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
         elif architecture == "glm4":
             layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
+        elif architecture == "glm4_moe":
+            layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -152,7 +154,7 @@ class HuggingFaceLoader:
         # Handle weight tying
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture in ("llama", "glm4") and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4", "glm4_moe") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         # Find tokenizer
