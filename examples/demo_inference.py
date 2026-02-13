@@ -1,11 +1,12 @@
 """Demo: Text generation using the offload runtime.
 
 Downloads a HuggingFace model, streams weights layer-by-layer through
-NullBackend, and performs autoregressive generation using NumPy.
+the best available backend, and performs autoregressive generation using NumPy.
 
 Usage:
     uv run python examples/demo_inference.py --model openai-community/gpt2 --prompt "Hello, I am" --max-tokens 50
     uv run python examples/demo_inference.py --model meta-llama/Llama-3.2-1B --prompt "Once upon a" --max-tokens 30
+    uv run python examples/demo_inference.py --model zai-org/GLM-4.7 --backend cuda --device-id 0
 """
 from __future__ import annotations
 
@@ -24,11 +25,24 @@ try:
 except ImportError:
     Tokenizer = None
 
-from offload_runtime.backends.null_backend import NullBackend
+from offload_runtime.backends import (
+    CUDABackend,
+    MPSBackend,
+    NullBackend,
+    ROCmBackend,
+    detect_backend,
+)
 from offload_runtime.executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
 from offload_runtime.loader.huggingface import HuggingFaceLoader
 from offload_runtime.runtime import OffloadRuntime
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
+
+_BACKEND_MAP: dict[str, Any] = {
+    "cuda": CUDABackend,
+    "rocm": ROCmBackend,
+    "mps": MPSBackend,
+    "null": NullBackend,
+}
 
 
 def main() -> None:
@@ -37,6 +51,9 @@ def main() -> None:
     parser.add_argument("--prompt", default="Hello, I am", help="Input prompt text")
     parser.add_argument("--max-tokens", type=int, default=50, help="Max tokens to generate")
     parser.add_argument("--compute-dtype", default="float32", help="Compute dtype")
+    parser.add_argument("--backend", default="auto", choices=["auto", "cuda", "rocm", "mps", "null"],
+                        help="Device backend (default: auto-detect)")
+    parser.add_argument("--device-id", type=int, default=0, help="GPU device ID (for cuda/rocm)")
     parser.add_argument("--local-dir", default=None, help="Load from local directory instead of downloading")
     args = parser.parse_args()
 
@@ -79,9 +96,19 @@ def main() -> None:
     print(f"  Input tokens: {len(token_ids)}")
     print()
 
+    # --- Select backend ---
+    if args.backend == "auto":
+        backend = detect_backend(device_id=args.device_id)
+    else:
+        cls = _BACKEND_MAP[args.backend]
+        if cls is None:
+            sys.exit(f"Backend '{args.backend}' is not available (missing dependency)")
+        backend = cls() if args.backend == "mps" else cls(args.device_id) if args.backend in ("cuda", "rocm") else cls()
+    print(f"  Backend: {backend.name}")
+    print()
+
     # --- Create runtime ---
     layer_ids = [layer.layer_id for layer in bundle.layers]
-    backend = NullBackend()
 
     with OffloadRuntime(
         layers=bundle.layers,

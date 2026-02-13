@@ -1,4 +1,4 @@
-from .backends import CUDABackend, DeviceBackend, MPSBackend, NullBackend, ROCmBackend
+from .backends import CUDABackend, DeviceBackend, MPSBackend, NullBackend, ROCmBackend, detect_backend
 from .buffer_pool import DeviceBufferPool
 from .executor import PassthroughExecutor
 from .pinned_pool import PinnedHostBufferPool
@@ -36,6 +36,7 @@ __all__ = [
     "CostAwareScheduler",
     "CUDABackend",
     "Dequantizer",
+    "detect_backend",
     "DeviceBackend",
     "DeviceBuffer",
     "DeviceBufferPool",

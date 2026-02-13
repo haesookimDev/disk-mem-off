@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .base import DeviceBackend
 from .null_backend import NullBackend
 
@@ -16,4 +18,20 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     MPSBackend = None
 
-__all__ = ["CUDABackend", "DeviceBackend", "MPSBackend", "NullBackend", "ROCmBackend"]
+
+def detect_backend(device_id: int = 0) -> DeviceBackend:
+    """Auto-detect the best available backend: CUDA → ROCm → MPS → Null."""
+    for BackendClass in (CUDABackend, ROCmBackend, MPSBackend):
+        if BackendClass is None:
+            continue
+        try:
+            return BackendClass() if BackendClass is MPSBackend else BackendClass(device_id)
+        except Exception:  # pragma: no cover - hardware not available
+            continue
+    return NullBackend()
+
+
+__all__ = [
+    "CUDABackend", "DeviceBackend", "MPSBackend", "NullBackend", "ROCmBackend",
+    "detect_backend",
+]

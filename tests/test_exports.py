@@ -29,6 +29,7 @@ class TestExports:
             "CostAwareScheduler",
             "CUDABackend",
             "Dequantizer",
+            "detect_backend",
             "DeviceBackend",
             "DeviceBuffer",
             "DeviceBufferPool",
