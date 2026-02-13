@@ -16,9 +16,10 @@ from .training import TrainingExecutor, TrainingLayerMetrics, TrainingMetrics, T
 from .types import DeviceBuffer, HostBuffer, LayerSpec, LoRASpec
 
 try:
-    from .executor_np import GLM4Executor, GPT2Executor, LlamaExecutor
+    from .executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
 except Exception:  # pragma: no cover - optional dependency
     GLM4Executor = None
+    GLM4MoeExecutor = None
     GPT2Executor = None
     LlamaExecutor = None
 
@@ -40,6 +41,7 @@ __all__ = [
     "DeviceBufferPool",
     "Float16Dequantizer",
     "GLM4Executor",
+    "GLM4MoeExecutor",
     "GPT2Executor",
     "HostBuffer",
     "HuggingFaceLoader",
