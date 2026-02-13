@@ -18,7 +18,9 @@ pytestmark = pytest.mark.skipif(not _has_deps, reason="inference deps not instal
 
 if _has_deps:
     from offload_runtime.backends.null_backend import NullBackend
-    from offload_runtime.executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
+    from offload_runtime.executor_np import (
+        GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor, Qwen3NextExecutor,
+    )
     from offload_runtime.loader.huggingface import HuggingFaceLoader
     from offload_runtime.runtime import OffloadRuntime
     from offload_runtime.scheduler.lookahead import LookaheadScheduler
@@ -376,6 +378,175 @@ class TestGLM4MoeEndToEnd:
         model_dir = _make_glm4_moe_model(tmp_path)
         bundle = HuggingFaceLoader.load_from_dir(model_dir)
         executor = GLM4MoeExecutor(bundle.config)
+        layer_ids = [l.layer_id for l in bundle.layers]
+
+        with OffloadRuntime(
+            layers=bundle.layers,
+            backend=NullBackend(),
+            storage=bundle.storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=executor,
+        ) as runtime:
+            token_ids = [0, 1]
+            for _ in range(3):
+                hidden = executor.embed(
+                    token_ids,
+                    bundle.embed_weights["model.embed_tokens.weight"],
+                )
+                hidden, _ = runtime.run_inference(layer_ids, inputs=hidden)
+                logits = executor.lm_head(
+                    hidden,
+                    bundle.head_weights["model.norm.weight"],
+                    bundle.head_weights["lm_head.weight"],
+                )
+                next_token = int(np.argmax(logits[-1]))
+                token_ids.append(next_token)
+
+            assert len(token_ids) == 5
+            assert all(0 <= t < 16 for t in token_ids)
+
+
+def _make_qwen3_next_model(tmp_path: Path) -> Path:
+    """Create a minimal Qwen3-Next model: 8 layers, hybrid attention + MoE.
+
+    full_attention_interval=4 → layers 3,7 are full attn, rest linear.
+    """
+    rng = np.random.default_rng(999)
+    hidden = 8
+    heads, kv_heads, head_dim = 2, 1, 4
+    n_layers, vocab = 8, 16
+    n_experts, num_experts_per_tok, moe_inter = 4, 2, 4
+    shared_inter = 4
+    full_attention_interval = 4
+
+    # Linear attention dimensions
+    lin_key_heads, lin_key_head_dim = 2, 4
+    lin_v_heads, lin_v_head_dim = 2, 4
+    conv_kernel = 4
+
+    q_dim = lin_key_heads * lin_key_head_dim    # 8
+    k_dim = lin_key_heads * lin_key_head_dim    # 8
+    v_dim = lin_v_heads * lin_v_head_dim        # 8
+    z_dim = lin_v_heads * lin_v_head_dim        # 8
+    b_dim = lin_key_heads * lin_key_head_dim    # 8
+    a_dim = lin_v_heads                         # 2
+
+    config = {
+        "architectures": ["Qwen3NextForCausalLM"],
+        "hidden_size": hidden, "num_attention_heads": heads,
+        "num_key_value_heads": kv_heads, "num_hidden_layers": n_layers,
+        "head_dim": head_dim, "vocab_size": vocab,
+        "rms_norm_eps": 1e-6, "rope_theta": 5000000.0,
+        "partial_rotary_factor": 0.5,
+        "full_attention_interval": full_attention_interval,
+        # Linear attention
+        "linear_num_key_heads": lin_key_heads,
+        "linear_key_head_dim": lin_key_head_dim,
+        "linear_num_value_heads": lin_v_heads,
+        "linear_value_head_dim": lin_v_head_dim,
+        "linear_conv_kernel_dim": conv_kernel,
+        # MoE
+        "num_experts": n_experts,
+        "num_experts_per_tok": num_experts_per_tok,
+        "moe_intermediate_size": moe_inter,
+        "shared_expert_intermediate_size": shared_inter,
+        "norm_topk_prob": True,
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config))
+
+    tensors: dict[str, Any] = {
+        "model.embed_tokens.weight": rng.standard_normal((vocab, hidden)).astype(np.float32),
+        "model.norm.weight": np.ones(hidden, dtype=np.float32),
+        "lm_head.weight": rng.standard_normal((vocab, hidden)).astype(np.float32),
+    }
+
+    def _add_moe_tensors(p: str) -> None:
+        tensors[f"{p}mlp.gate.weight"] = (rng.standard_normal((n_experts, hidden)) * 0.02).astype(np.float32)
+        for j in range(n_experts):
+            tensors[f"{p}mlp.experts.{j}.gate_proj.weight"] = (rng.standard_normal((moe_inter, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}mlp.experts.{j}.up_proj.weight"] = (rng.standard_normal((moe_inter, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}mlp.experts.{j}.down_proj.weight"] = (rng.standard_normal((hidden, moe_inter)) * 0.02).astype(np.float32)
+        tensors[f"{p}mlp.shared_expert.gate_proj.weight"] = (rng.standard_normal((shared_inter, hidden)) * 0.02).astype(np.float32)
+        tensors[f"{p}mlp.shared_expert.up_proj.weight"] = (rng.standard_normal((shared_inter, hidden)) * 0.02).astype(np.float32)
+        tensors[f"{p}mlp.shared_expert.down_proj.weight"] = (rng.standard_normal((hidden, shared_inter)) * 0.02).astype(np.float32)
+        tensors[f"{p}mlp.shared_expert_gate.weight"] = (rng.standard_normal((1, hidden)) * 0.02).astype(np.float32)
+
+    for i in range(n_layers):
+        p = f"model.layers.{i}."
+        is_full = (i + 1) % full_attention_interval == 0
+        tensors[f"{p}input_layernorm.weight"] = np.ones(hidden, dtype=np.float32)
+
+        if is_full:
+            # Full attention: q_proj has 2x output (query + gate)
+            tensors[f"{p}self_attn.q_proj.weight"] = (rng.standard_normal((heads * head_dim * 2, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}self_attn.k_proj.weight"] = (rng.standard_normal((kv_heads * head_dim, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}self_attn.v_proj.weight"] = (rng.standard_normal((kv_heads * head_dim, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}self_attn.q_norm.weight"] = np.ones(head_dim, dtype=np.float32)
+            tensors[f"{p}self_attn.k_norm.weight"] = np.ones(head_dim, dtype=np.float32)
+            tensors[f"{p}self_attn.o_proj.weight"] = (rng.standard_normal((hidden, heads * head_dim)) * 0.02).astype(np.float32)
+        else:
+            # Linear attention (Gated DeltaNet)
+            tensors[f"{p}linear_attn.in_proj_qkvz.weight"] = (rng.standard_normal((q_dim + k_dim + v_dim + z_dim, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}linear_attn.in_proj_ba.weight"] = (rng.standard_normal((b_dim + a_dim, hidden)) * 0.02).astype(np.float32)
+            tensors[f"{p}linear_attn.conv1d.weight"] = (rng.standard_normal((q_dim + k_dim + v_dim, 1, conv_kernel)) * 0.02).astype(np.float32)
+            tensors[f"{p}linear_attn.A_log"] = rng.standard_normal(lin_v_heads).astype(np.float32)
+            tensors[f"{p}linear_attn.dt_bias"] = np.zeros(lin_v_heads, dtype=np.float32)
+            tensors[f"{p}linear_attn.norm.weight"] = np.ones(v_dim, dtype=np.float32)
+            tensors[f"{p}linear_attn.out_proj.weight"] = (rng.standard_normal((hidden, v_dim)) * 0.02).astype(np.float32)
+
+        tensors[f"{p}post_attention_layernorm.weight"] = np.ones(hidden, dtype=np.float32)
+        _add_moe_tensors(p)
+
+    save_file(tensors, str(tmp_path / "model.safetensors"))
+    return tmp_path
+
+
+class TestQwen3NextEndToEnd:
+    def test_full_pipeline(self, tmp_path: Path) -> None:
+        model_dir = _make_qwen3_next_model(tmp_path)
+        bundle = HuggingFaceLoader.load_from_dir(model_dir)
+        executor = Qwen3NextExecutor(bundle.config)
+        layer_ids = [l.layer_id for l in bundle.layers]
+
+        # Verify metadata
+        assert bundle.layers[3].metadata["attn_type"] == "full"
+        assert bundle.layers[7].metadata["attn_type"] == "full"
+        assert bundle.layers[0].metadata["attn_type"] == "linear"
+        assert bundle.layers[1].metadata["attn_type"] == "linear"
+
+        with OffloadRuntime(
+            layers=bundle.layers,
+            backend=NullBackend(),
+            storage=bundle.storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=executor,
+        ) as runtime:
+            token_ids = [0, 1, 2]
+            hidden = executor.embed(
+                token_ids,
+                bundle.embed_weights["model.embed_tokens.weight"],
+            )
+            assert hidden.shape == (3, 8)
+
+            hidden, metrics = runtime.run_inference(layer_ids, inputs=hidden)
+            assert hidden.shape == (3, 8)
+            assert metrics.layer_count == 8
+
+            logits = executor.lm_head(
+                hidden,
+                bundle.head_weights["model.norm.weight"],
+                bundle.head_weights["lm_head.weight"],
+            )
+            assert logits.shape == (3, 16)
+            assert np.all(np.isfinite(logits))
+
+            next_token = int(np.argmax(logits[-1]))
+            assert 0 <= next_token < 16
+
+    def test_autoregressive_generation(self, tmp_path: Path) -> None:
+        model_dir = _make_qwen3_next_model(tmp_path)
+        bundle = HuggingFaceLoader.load_from_dir(model_dir)
+        executor = Qwen3NextExecutor(bundle.config)
         layer_ids = [l.layer_id for l in bundle.layers]
 
         with OffloadRuntime(

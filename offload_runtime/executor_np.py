@@ -29,6 +29,7 @@ from offload_runtime.executors.gpt2 import GPT2Executor
 from offload_runtime.executors.gpt2 import LAYER_TENSORS as _GPT2_TENSOR_ORDER  # noqa: F401
 from offload_runtime.executors.llama import LlamaExecutor
 from offload_runtime.executors.llama import LAYER_TENSORS as _LLAMA_TENSOR_ORDER  # noqa: F401
+from offload_runtime.executors.qwen3_next import Qwen3NextExecutor
 
 __all__ = [
     # Helpers
@@ -37,6 +38,7 @@ __all__ = [
     "linear", "linear_t", "rope", "repeat_kv",
     # Executors
     "GPT2Executor", "LlamaExecutor", "GLM4Executor", "GLM4MoeExecutor",
+    "Qwen3NextExecutor",
     # Tensor orders
     "_GPT2_TENSOR_ORDER", "_LLAMA_TENSOR_ORDER", "_GLM4_TENSOR_ORDER",
 ]

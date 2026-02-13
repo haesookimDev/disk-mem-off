@@ -7,7 +7,7 @@ class TestExports:
     # Symbols that may be None due to missing optional dependencies
     _optional_exports = {
         "CUDABackend", "ROCmBackend", "MPSBackend",
-        "GPT2Executor", "LlamaExecutor",
+        "GPT2Executor", "LlamaExecutor", "Qwen3NextExecutor",
         "HuggingFaceLoader", "ModelBundle", "SafetensorsStorage",
     }
 
@@ -55,6 +55,7 @@ class TestExports:
             "PassthroughExecutor",
             "PinnedHostBufferPool",
             "PrefetchScheduler",
+            "Qwen3NextExecutor",
             "ReverseLookaheadScheduler",
             "ROCmBackend",
             "RuntimeMetrics",

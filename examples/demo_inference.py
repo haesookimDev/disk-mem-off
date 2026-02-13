@@ -32,7 +32,9 @@ from offload_runtime.backends import (
     ROCmBackend,
     detect_backend,
 )
-from offload_runtime.executor_np import GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor
+from offload_runtime.executor_np import (
+    GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor, Qwen3NextExecutor,
+)
 from offload_runtime.loader.huggingface import HuggingFaceLoader
 from offload_runtime.runtime import OffloadRuntime
 from offload_runtime.scheduler.lookahead import LookaheadScheduler
@@ -78,6 +80,8 @@ def main() -> None:
         executor = GLM4Executor(bundle.config)
     elif bundle.architecture == "glm4_moe":
         executor = GLM4MoeExecutor(bundle.config)
+    elif bundle.architecture == "qwen3_next":
+        executor = Qwen3NextExecutor(bundle.config)
     else:
         sys.exit(f"Unsupported architecture: {bundle.architecture}")
 

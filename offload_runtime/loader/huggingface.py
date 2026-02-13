@@ -36,6 +36,7 @@ _SUPPORTED_ARCHITECTURES: dict[str, str] = {
     "LlamaForCausalLM": "llama",
     "Glm4ForCausalLM": "glm4",
     "Glm4MoeForCausalLM": "glm4_moe",
+    "Qwen3NextForCausalLM": "qwen3_next",
 }
 
 # Canonical tensor order within a transformer block.
@@ -70,6 +71,31 @@ _GLM4_LAYER_TENSORS = [
     "mlp.gate_up_proj.weight",
     "mlp.down_proj.weight",
     "post_mlp_layernorm.weight",
+]
+
+# Qwen3-Next: full attention layers (GQA + gated output).
+_QWEN3_NEXT_FULL_ATTN_TENSORS = [
+    "input_layernorm.weight",
+    "self_attn.q_proj.weight",
+    "self_attn.k_proj.weight",
+    "self_attn.v_proj.weight",
+    "self_attn.q_norm.weight",
+    "self_attn.k_norm.weight",
+    "self_attn.o_proj.weight",
+    "post_attention_layernorm.weight",
+]
+
+# Qwen3-Next: linear attention layers (Gated DeltaNet).
+_QWEN3_NEXT_LINEAR_ATTN_TENSORS = [
+    "input_layernorm.weight",
+    "linear_attn.in_proj_qkvz.weight",
+    "linear_attn.in_proj_ba.weight",
+    "linear_attn.conv1d.weight",
+    "linear_attn.A_log",
+    "linear_attn.dt_bias",
+    "linear_attn.norm.weight",
+    "linear_attn.out_proj.weight",
+    "post_attention_layernorm.weight",
 ]
 
 # GLM-4 MoE: dense layers (first_k_dense_replace) use this static list.
@@ -144,6 +170,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
         elif architecture == "glm4_moe":
             layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
+        elif architecture == "qwen3_next":
+            layers, embed_names, head_names = cls._group_qwen3_next(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -154,7 +182,7 @@ class HuggingFaceLoader:
         # Handle weight tying
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture in ("llama", "glm4", "glm4_moe") and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4", "glm4_moe", "qwen3_next") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         # Find tokenizer
@@ -214,6 +242,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
         elif architecture == "glm4_moe":
             layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
+        elif architecture == "qwen3_next":
+            layers, embed_names, head_names = cls._group_qwen3_next(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -222,7 +252,7 @@ class HuggingFaceLoader:
 
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture in ("llama", "glm4", "glm4_moe") and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4", "glm4_moe", "qwen3_next") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         tokenizer_path: Path | None = None
@@ -503,6 +533,75 @@ class HuggingFaceLoader:
                     "tensors": meta_list,
                     "full_prefix": prefix,
                     "is_moe": is_moe,
+                },
+            ))
+
+        embed_names = ["model.embed_tokens.weight"]
+        head_names = [n for n in tensor_info if n == "model.norm.weight" or n == "lm_head.weight"]
+
+        return layers, embed_names, head_names
+
+    @classmethod
+    def _group_qwen3_next(
+        cls,
+        config: dict[str, Any],
+        tensor_info: dict[str, dict[str, Any]],
+        compute_dtype: str,
+    ) -> tuple[list[LayerSpec], list[str], list[str]]:
+        n_layer = config["num_hidden_layers"]
+        full_attention_interval = config.get("full_attention_interval", 4)
+        layers: list[LayerSpec] = []
+
+        for i in range(n_layer):
+            prefix = f"model.layers.{i}."
+            is_full_attn = (i + 1) % full_attention_interval == 0
+            attn_tensors = _QWEN3_NEXT_FULL_ATTN_TENSORS if is_full_attn else _QWEN3_NEXT_LINEAR_ATTN_TENSORS
+
+            meta_list: list[dict[str, Any]] = []
+            offset = 0
+
+            # Attention tensors (static list)
+            for short_name in attn_tensors:
+                full_name = prefix + short_name
+                if full_name not in tensor_info:
+                    continue
+                shape = tensor_info[full_name]["shape"]
+                nbytes = cls._compute_nbytes(shape, compute_dtype)
+                meta_list.append({
+                    "name": short_name,
+                    "shape": shape,
+                    "dtype": compute_dtype,
+                    "offset": offset,
+                    "nbytes": nbytes,
+                })
+                offset += nbytes
+
+            # MoE tensors (dynamic collection for all experts)
+            moe_prefix = prefix + "mlp."
+            moe_tensors = sorted(
+                name for name in tensor_info if name.startswith(moe_prefix)
+            )
+            for full_name in moe_tensors:
+                short_name = full_name[len(prefix):]
+                shape = tensor_info[full_name]["shape"]
+                nbytes = cls._compute_nbytes(shape, compute_dtype)
+                meta_list.append({
+                    "name": short_name,
+                    "shape": shape,
+                    "dtype": compute_dtype,
+                    "offset": offset,
+                    "nbytes": nbytes,
+                })
+                offset += nbytes
+
+            layers.append(LayerSpec(
+                layer_id=i,
+                name=f"model.layers.{i}",
+                nbytes=offset,
+                metadata={
+                    "tensors": meta_list,
+                    "full_prefix": prefix,
+                    "attn_type": "full" if is_full_attn else "linear",
                 },
             ))
 
