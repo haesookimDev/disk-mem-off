@@ -3,7 +3,7 @@ name = "disk-mem-off"
 version = "0.1.0"
 description = "Memory offloading runtime for large model inference with limited VRAM"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "huggingface-hub>=1.4.1",
     "numpy>=2.4.2",
