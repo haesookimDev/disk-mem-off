@@ -33,6 +33,7 @@ class TestExports:
             "DeviceBuffer",
             "DeviceBufferPool",
             "Float16Dequantizer",
+            "GLM4Executor",
             "GPT2Executor",
             "HostBuffer",
             "HuggingFaceLoader",
