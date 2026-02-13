@@ -212,6 +212,8 @@ class HuggingFaceLoader:
             layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
         elif architecture == "glm4":
             layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
+        elif architecture == "glm4_moe":
+            layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
 
@@ -220,7 +222,7 @@ class HuggingFaceLoader:
 
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture in ("llama", "glm4") and "lm_head.weight" not in head_weights:
+        elif architecture in ("llama", "glm4", "glm4_moe") and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
 
         tokenizer_path: Path | None = None
@@ -435,6 +437,73 @@ class HuggingFaceLoader:
                 name=f"model.layers.{i}",
                 nbytes=offset,
                 metadata={"tensors": meta_list, "full_prefix": prefix},
+            ))
+
+        embed_names = ["model.embed_tokens.weight"]
+        head_names = [n for n in tensor_info if n == "model.norm.weight" or n == "lm_head.weight"]
+
+        return layers, embed_names, head_names
+
+    @classmethod
+    def _group_glm4_moe(
+        cls,
+        config: dict[str, Any],
+        tensor_info: dict[str, dict[str, Any]],
+        compute_dtype: str,
+    ) -> tuple[list[LayerSpec], list[str], list[str]]:
+        n_layer = config["num_hidden_layers"]
+        first_k_dense = config.get("first_k_dense_replace", 0)
+        layers: list[LayerSpec] = []
+
+        for i in range(n_layer):
+            prefix = f"model.layers.{i}."
+            is_moe = i >= first_k_dense
+            meta_list: list[dict[str, Any]] = []
+            offset = 0
+
+            if not is_moe:
+                # Dense layers: use static tensor list
+                for short_name in _GLM4_MOE_DENSE_LAYER_TENSORS:
+                    full_name = prefix + short_name
+                    if full_name not in tensor_info:
+                        continue
+                    shape = tensor_info[full_name]["shape"]
+                    nbytes = cls._compute_nbytes(shape, compute_dtype)
+                    meta_list.append({
+                        "name": short_name,
+                        "shape": shape,
+                        "dtype": compute_dtype,
+                        "offset": offset,
+                        "nbytes": nbytes,
+                    })
+                    offset += nbytes
+            else:
+                # MoE layers: collect all tensors matching the layer prefix
+                layer_tensors = sorted(
+                    name for name in tensor_info if name.startswith(prefix)
+                )
+                for full_name in layer_tensors:
+                    short_name = full_name[len(prefix):]
+                    shape = tensor_info[full_name]["shape"]
+                    nbytes = cls._compute_nbytes(shape, compute_dtype)
+                    meta_list.append({
+                        "name": short_name,
+                        "shape": shape,
+                        "dtype": compute_dtype,
+                        "offset": offset,
+                        "nbytes": nbytes,
+                    })
+                    offset += nbytes
+
+            layers.append(LayerSpec(
+                layer_id=i,
+                name=f"model.layers.{i}",
+                nbytes=offset,
+                metadata={
+                    "tensors": meta_list,
+                    "full_prefix": prefix,
+                    "is_moe": is_moe,
+                },
             ))
 
         embed_names = ["model.embed_tokens.weight"]
