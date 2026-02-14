@@ -5,17 +5,17 @@ from .null_backend import NullBackend
 
 try:
     from .cuda_backend import CUDABackend
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     CUDABackend = None
 
 try:
     from .rocm_backend import ROCmBackend
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     ROCmBackend = None
 
 try:
     from .mps_backend import MPSBackend
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     MPSBackend = None
 
 
@@ -26,7 +26,7 @@ def detect_backend(device_id: int = 0) -> DeviceBackend:
             continue
         try:
             return BackendClass() if BackendClass is MPSBackend else BackendClass(device_id)
-        except Exception:  # pragma: no cover - hardware not available
+        except (ImportError, ModuleNotFoundError):  # pragma: no cover
             continue
     return NullBackend()
 

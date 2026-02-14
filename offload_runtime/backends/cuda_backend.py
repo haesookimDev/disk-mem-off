@@ -8,7 +8,7 @@ from offload_runtime.types import DeviceBuffer, HostBuffer
 
 try:
     from cuda import cudart  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     cudart = None
 
 

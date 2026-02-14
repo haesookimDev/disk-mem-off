@@ -25,7 +25,7 @@ try:
         GLM4Executor, GLM4MoeExecutor, GPT2Executor, LlamaExecutor,
         Qwen3NextExecutor,
     )
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency
     GLM4Executor = None
     GLM4MoeExecutor = None
     GPT2Executor = None
@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     from .loader import HuggingFaceLoader, ModelBundle, SafetensorsStorage
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency
     HuggingFaceLoader = None
     ModelBundle = None
     SafetensorsStorage = None

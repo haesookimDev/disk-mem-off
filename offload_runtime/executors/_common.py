@@ -9,7 +9,7 @@ from offload_runtime.types import DeviceBuffer, HostBuffer, LayerSpec
 
 try:
     import numpy as np
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     np = None
 
 

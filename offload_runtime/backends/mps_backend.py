@@ -9,7 +9,7 @@ from offload_runtime.types import DeviceBuffer, HostBuffer
 try:
     import Metal  # type: ignore  # pyobjc-framework-Metal
     _metal_device = Metal.MTLCreateSystemDefaultDevice()
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     Metal = None
     _metal_device = None
 

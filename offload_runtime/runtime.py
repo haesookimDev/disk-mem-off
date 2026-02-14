@@ -130,60 +130,69 @@ class OffloadRuntime:
         for layer_id in self.scheduler.warmup_prefetch_ids(ordered_layer_ids):
             self.storage.request(layer_id)
 
-        for index, layer_id in enumerate(ordered_layer_ids):
-            layer = self.layers[layer_id]
-            lm = LayerMetrics(layer_id=layer_id)
+        device_weights: DeviceBuffer | None = None
+        try:
+            for index, layer_id in enumerate(ordered_layer_ids):
+                layer = self.layers[layer_id]
+                lm = LayerMetrics(layer_id=layer_id)
 
-            t_stall = time.perf_counter()
-            self.storage.wait(layer_id)
-            host_weights = self.storage.get(layer_id)
-            lm.stall_ms = (time.perf_counter() - t_stall) * 1000
+                t_stall = time.perf_counter()
+                self.storage.wait(layer_id)
+                host_weights = self.storage.get(layer_id)
+                lm.stall_ms = (time.perf_counter() - t_stall) * 1000
 
-            if self.dequantizer is not None and self.dequantizer.needs_dequantize(layer):
-                compressed_size = host_weights.nbytes
-                host_weights = self.dequantizer.dequantize(layer, host_weights)
-                lm.compressed_nbytes = compressed_size
-                metrics.compressed_bytes += compressed_size
+                if hasattr(self.storage, "get_disk_read_ms"):
+                    lm.disk_read_ms = self.storage.get_disk_read_ms(layer_id)
 
-            actual_nbytes = host_weights.nbytes
-            staged = self._stage_pinned(host_weights)
-            device_weights = self._alloc_device(actual_nbytes)
+                if self.dequantizer is not None and self.dequantizer.needs_dequantize(layer):
+                    compressed_size = host_weights.nbytes
+                    host_weights = self.dequantizer.dequantize(layer, host_weights)
+                    lm.compressed_nbytes = compressed_size
+                    metrics.compressed_bytes += compressed_size
 
-            t0 = time.perf_counter()
-            self.backend.copy_h2d_async(device_weights, staged, self.transfer_stream)
-            transfer_event = self.backend.record_event(self.transfer_stream)
-            self.backend.wait_event(self.compute_stream, transfer_event)
-            self.backend.destroy_event(transfer_event)
-            h2d_elapsed = time.perf_counter() - t0
-            lm.h2d_ms = h2d_elapsed * 1000
-            lm.nbytes = actual_nbytes
-            metrics.transfer_seconds += h2d_elapsed
-            metrics.transferred_bytes += actual_nbytes
+                actual_nbytes = host_weights.nbytes
+                staged = self._stage_pinned(host_weights)
+                device_weights = self._alloc_device(actual_nbytes)
 
-            t1 = time.perf_counter()
-            activations = self.executor.run_layer(
-                layer=layer,
-                activations=activations,
-                device_weights=device_weights,
-                backend=self.backend,
-                stream=self.compute_stream,
-            )
-            compute_elapsed = time.perf_counter() - t1
-            lm.compute_ms = compute_elapsed * 1000
-            metrics.compute_seconds += compute_elapsed
+                t0 = time.perf_counter()
+                self.backend.copy_h2d_async(device_weights, staged, self.transfer_stream)
+                transfer_event = self.backend.record_event(self.transfer_stream)
+                self.backend.wait_event(self.compute_stream, transfer_event)
+                self.backend.destroy_event(transfer_event)
+                h2d_elapsed = time.perf_counter() - t0
+                lm.h2d_ms = h2d_elapsed * 1000
+                lm.nbytes = actual_nbytes
+                metrics.transfer_seconds += h2d_elapsed
+                metrics.transferred_bytes += actual_nbytes
 
-            self._free_device(device_weights)
-            self.storage.release(layer_id)
-            if staged is not host_weights and self._pinned_pool is not None:
-                self._pinned_pool.release(staged)
+                t1 = time.perf_counter()
+                activations = self.executor.run_layer(
+                    layer=layer,
+                    activations=activations,
+                    device_weights=device_weights,
+                    backend=self.backend,
+                    stream=self.compute_stream,
+                )
+                compute_elapsed = time.perf_counter() - t1
+                lm.compute_ms = compute_elapsed * 1000
+                metrics.compute_seconds += compute_elapsed
 
-            metrics.layer_metrics.append(lm)
+                self._free_device(device_weights)
+                device_weights = None
+                self.storage.release(layer_id)
+                if staged is not host_weights and self._pinned_pool is not None:
+                    self._pinned_pool.release(staged)
 
-            next_layer_id = self.scheduler.next_prefetch_id(ordered_layer_ids, index)
-            if next_layer_id is not None:
-                self.storage.request(next_layer_id)
+                metrics.layer_metrics.append(lm)
 
-        self.backend.synchronize_stream(self.transfer_stream)
-        self.backend.synchronize_stream(self.compute_stream)
+                next_layer_id = self.scheduler.next_prefetch_id(ordered_layer_ids, index)
+                if next_layer_id is not None:
+                    self.storage.request(next_layer_id)
+        finally:
+            if device_weights is not None:
+                self._free_device(device_weights)
+            self.backend.synchronize_stream(self.transfer_stream)
+            self.backend.synchronize_stream(self.compute_stream)
+
         metrics.end_to_end_seconds = time.perf_counter() - wall_start
         return activations, metrics

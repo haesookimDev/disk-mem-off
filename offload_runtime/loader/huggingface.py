@@ -10,17 +10,17 @@ from offload_runtime.types import LayerSpec
 
 try:
     from huggingface_hub import snapshot_download
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     snapshot_download = None
 
 try:
     from safetensors import safe_open
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     safe_open = None
 
 try:
     import numpy as np
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     np = None
 
 from offload_runtime.loader.safetensors_storage import SafetensorsStorage

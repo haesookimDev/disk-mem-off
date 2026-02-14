@@ -53,6 +53,7 @@ class TrainingLayerMetrics:
     backward_h2d_ms: float = 0.0
     backward_compute_ms: float = 0.0
     stall_ms: float = 0.0
+    disk_read_ms: float = 0.0
     nbytes: int = 0
 
 
@@ -162,6 +163,9 @@ class TrainingRuntime:
         host_weights = self.storage.get(layer_id)
         lm.stall_ms += (time.perf_counter() - t_stall) * 1000
 
+        if hasattr(self.storage, "get_disk_read_ms"):
+            lm.disk_read_ms += self.storage.get_disk_read_ms(layer_id)
+
         staged = self._stage_pinned(host_weights)
         actual_nbytes = host_weights.nbytes
         device_weights = self._alloc_device(actual_nbytes)
@@ -209,83 +213,90 @@ class TrainingRuntime:
         for layer_id in self.forward_scheduler.warmup_prefetch_ids(ordered_layer_ids):
             self.storage.request(layer_id)
 
-        for index, layer_id in enumerate(ordered_layer_ids):
-            layer = self.layers[layer_id]
-            lm = TrainingLayerMetrics(layer_id=layer_id)
+        device_weights: DeviceBuffer | None = None
+        try:
+            for index, layer_id in enumerate(ordered_layer_ids):
+                layer = self.layers[layer_id]
+                lm = TrainingLayerMetrics(layer_id=layer_id)
 
-            device_weights = self._load_and_transfer(
-                layer_id, self.forward_stream, metrics, lm, "forward",
-            )
+                device_weights = self._load_and_transfer(
+                    layer_id, self.forward_stream, metrics, lm, "forward",
+                )
 
-            lora = self.lora_specs.get(layer_id)
-            lora_a, lora_b = self._lora_buffers.get(layer_id, (None, None))
+                lora = self.lora_specs.get(layer_id)
+                lora_a, lora_b = self._lora_buffers.get(layer_id, (None, None))
 
-            t1 = time.perf_counter()
-            activations, saved = self.executor.forward_layer(
-                layer=layer,
-                lora=lora,
-                activations=activations,
-                device_weights=device_weights,
-                lora_a=lora_a,
-                lora_b=lora_b,
-                backend=self.backend,
-                stream=self.forward_stream,
-            )
-            fwd_elapsed = time.perf_counter() - t1
-            lm.forward_compute_ms = fwd_elapsed * 1000
-            metrics.forward_compute_seconds += fwd_elapsed
+                t1 = time.perf_counter()
+                activations, saved = self.executor.forward_layer(
+                    layer=layer,
+                    lora=lora,
+                    activations=activations,
+                    device_weights=device_weights,
+                    lora_a=lora_a,
+                    lora_b=lora_b,
+                    backend=self.backend,
+                    stream=self.forward_stream,
+                )
+                fwd_elapsed = time.perf_counter() - t1
+                lm.forward_compute_ms = fwd_elapsed * 1000
+                metrics.forward_compute_seconds += fwd_elapsed
 
-            saved_states[layer_id] = saved
-            self._free_device(device_weights)
-            layer_metrics_map[layer_id] = lm
+                saved_states[layer_id] = saved
+                self._free_device(device_weights)
+                device_weights = None
+                layer_metrics_map[layer_id] = lm
 
-            next_id = self.forward_scheduler.next_prefetch_id(ordered_layer_ids, index)
-            if next_id is not None:
-                self.storage.request(next_id)
+                next_id = self.forward_scheduler.next_prefetch_id(ordered_layer_ids, index)
+                if next_id is not None:
+                    self.storage.request(next_id)
 
-        # -- Backward pass (reverse order) --
-        reversed_ids = list(reversed(ordered_layer_ids))
-        grad = activations
+            # -- Backward pass (reverse order) --
+            reversed_ids = list(reversed(ordered_layer_ids))
+            grad = activations
 
-        for layer_id in self.backward_scheduler.warmup_prefetch_ids(reversed_ids):
-            self.storage.request(layer_id)
+            for layer_id in self.backward_scheduler.warmup_prefetch_ids(reversed_ids):
+                self.storage.request(layer_id)
 
-        for index, layer_id in enumerate(reversed_ids):
-            layer = self.layers[layer_id]
-            lm = layer_metrics_map[layer_id]
+            for index, layer_id in enumerate(reversed_ids):
+                layer = self.layers[layer_id]
+                lm = layer_metrics_map[layer_id]
 
-            device_weights = self._load_and_transfer(
-                layer_id, self.backward_stream, metrics, lm, "backward",
-            )
+                device_weights = self._load_and_transfer(
+                    layer_id, self.backward_stream, metrics, lm, "backward",
+                )
 
-            lora = self.lora_specs.get(layer_id)
-            lora_a, lora_b = self._lora_buffers.get(layer_id, (None, None))
+                lora = self.lora_specs.get(layer_id)
+                lora_a, lora_b = self._lora_buffers.get(layer_id, (None, None))
 
-            t2 = time.perf_counter()
-            grad, grad_a, grad_b = self.executor.backward_layer(
-                layer=layer,
-                lora=lora,
-                grad_output=grad,
-                saved_state=saved_states[layer_id],
-                device_weights=device_weights,
-                lora_a=lora_a,
-                lora_b=lora_b,
-                backend=self.backend,
-                stream=self.backward_stream,
-            )
-            bwd_elapsed = time.perf_counter() - t2
-            lm.backward_compute_ms = bwd_elapsed * 1000
-            metrics.backward_compute_seconds += bwd_elapsed
+                t2 = time.perf_counter()
+                grad, grad_a, grad_b = self.executor.backward_layer(
+                    layer=layer,
+                    lora=lora,
+                    grad_output=grad,
+                    saved_state=saved_states[layer_id],
+                    device_weights=device_weights,
+                    lora_a=lora_a,
+                    lora_b=lora_b,
+                    backend=self.backend,
+                    stream=self.backward_stream,
+                )
+                bwd_elapsed = time.perf_counter() - t2
+                lm.backward_compute_ms = bwd_elapsed * 1000
+                metrics.backward_compute_seconds += bwd_elapsed
 
-            self._free_device(device_weights)
+                self._free_device(device_weights)
+                device_weights = None
 
-            next_id = self.backward_scheduler.next_prefetch_id(reversed_ids, index)
-            if next_id is not None:
-                self.storage.request(next_id)
+                next_id = self.backward_scheduler.next_prefetch_id(reversed_ids, index)
+                if next_id is not None:
+                    self.storage.request(next_id)
+        finally:
+            if device_weights is not None:
+                self._free_device(device_weights)
+            self.backend.synchronize_stream(self.transfer_stream)
+            self.backend.synchronize_stream(self.forward_stream)
+            self.backend.synchronize_stream(self.backward_stream)
 
-        self.backend.synchronize_stream(self.transfer_stream)
-        self.backend.synchronize_stream(self.forward_stream)
-        self.backend.synchronize_stream(self.backward_stream)
         metrics.end_to_end_seconds = time.perf_counter() - wall_start
         metrics.layer_metrics = [layer_metrics_map[lid] for lid in ordered_layer_ids]
         return grad, metrics

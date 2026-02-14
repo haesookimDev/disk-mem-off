@@ -10,12 +10,12 @@ from offload_runtime.types import HostBuffer, LayerSpec
 
 try:
     from safetensors import safe_open
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     safe_open = None
 
 try:
     import numpy as np
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     np = None
 
 
