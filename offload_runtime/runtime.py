@@ -32,6 +32,7 @@ class LayerMetrics:
     h2d_ms: float = 0.0
     compute_ms: float = 0.0
     stall_ms: float = 0.0
+    disk_read_ms: float = 0.0
     nbytes: int = 0
     compressed_nbytes: int = 0
 
