@@ -101,3 +101,36 @@ class TestCostAwareScheduler:
         sched = CostAwareScheduler(min_lookahead=1)
         ids = [0, 1, 2]
         assert sched.next_prefetch_id(ids, 2) is None
+
+    def test_feed_metrics_captures_io_ms(self) -> None:
+        sched = CostAwareScheduler()
+        metrics = [LayerMetrics(layer_id=0, h2d_ms=1.0, compute_ms=5.0, disk_read_ms=3.0)]
+        sched.feed_metrics(metrics)
+        assert sched._costs[0].io_ms == pytest.approx(3.0)
+
+    def test_io_ms_uses_stall_as_fallback(self) -> None:
+        sched = CostAwareScheduler()
+        # disk_read_ms=0.0 → falls back to stall_ms
+        metrics = [LayerMetrics(layer_id=0, h2d_ms=1.0, compute_ms=5.0, stall_ms=4.0)]
+        sched.feed_metrics(metrics)
+        assert sched._costs[0].io_ms == pytest.approx(4.0)
+
+    def test_high_io_reduces_effective_lookahead(self) -> None:
+        """When disk I/O is the bottleneck (io_ms >> h2d_ms), prefetch cost increases."""
+        sched = CostAwareScheduler(min_lookahead=1, max_lookahead=5)
+        # io_ms=10ms dominates h2d_ms=1ms, so prefetch_ms = max(1, 10) = 10ms
+        # With 10ms compute budget and 10ms per prefetch, only 1 layer fits
+        sched.feed_metrics([
+            LayerMetrics(layer_id=i, h2d_ms=1.0, compute_ms=10.0, disk_read_ms=10.0)
+            for i in range(6)
+        ])
+        ids = [0, 1, 2, 3, 4, 5]
+        result = sched.next_prefetch_id(ids, 0)
+        assert result == 1  # min_lookahead=1
+
+    def test_io_ms_ema_smoothing(self) -> None:
+        sched = CostAwareScheduler(ema_alpha=0.5)
+        sched.feed_metrics([LayerMetrics(layer_id=0, h2d_ms=1.0, compute_ms=5.0, disk_read_ms=2.0)])
+        sched.feed_metrics([LayerMetrics(layer_id=0, h2d_ms=1.0, compute_ms=5.0, disk_read_ms=6.0)])
+        # EMA: 0.5 * 6.0 + 0.5 * 2.0 = 4.0
+        assert sched._costs[0].io_ms == pytest.approx(4.0)

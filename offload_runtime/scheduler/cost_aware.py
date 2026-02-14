@@ -10,6 +10,7 @@ class LayerCostEstimate:
     layer_id: int
     h2d_ms: float = 0.0
     compute_ms: float = 0.0
+    io_ms: float = 0.0
     sample_count: int = 0
 
 
@@ -40,18 +41,21 @@ class CostAwareScheduler:
     def feed_metrics(self, layer_metrics: list) -> None:
         """Update cost model with observed LayerMetrics from a completed run."""
         for lm in layer_metrics:
+            io_ms = getattr(lm, "disk_read_ms", 0.0) or lm.stall_ms
             existing = self._costs.get(lm.layer_id)
             if existing is None:
                 self._costs[lm.layer_id] = LayerCostEstimate(
                     layer_id=lm.layer_id,
                     h2d_ms=lm.h2d_ms,
                     compute_ms=lm.compute_ms,
+                    io_ms=io_ms,
                     sample_count=1,
                 )
             else:
                 alpha = self.ema_alpha
                 existing.h2d_ms = alpha * lm.h2d_ms + (1 - alpha) * existing.h2d_ms
                 existing.compute_ms = alpha * lm.compute_ms + (1 - alpha) * existing.compute_ms
+                existing.io_ms = alpha * io_ms + (1 - alpha) * existing.io_ms
                 existing.sample_count += 1
 
     def _effective_lookahead(self, ordered_layer_ids: list[int], current_index: int) -> int:
@@ -76,8 +80,11 @@ class CostAwareScheduler:
         for future_idx in range(current_index + 1, len(ordered_layer_ids)):
             future_id = ordered_layer_ids[future_idx]
             future_cost = self._costs.get(future_id)
-            h2d_est = future_cost.h2d_ms if future_cost else compute_budget_ms
-            accumulated_h2d_ms += h2d_est
+            if future_cost:
+                prefetch_ms = max(future_cost.h2d_ms, future_cost.io_ms)
+            else:
+                prefetch_ms = compute_budget_ms
+            accumulated_h2d_ms += prefetch_ms
             lookahead += 1
             if accumulated_h2d_ms >= compute_budget_ms:
                 break
