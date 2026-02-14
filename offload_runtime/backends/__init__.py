@@ -26,7 +26,7 @@ def detect_backend(device_id: int = 0) -> DeviceBackend:
             continue
         try:
             return BackendClass() if BackendClass is MPSBackend else BackendClass(device_id)
-        except (ImportError, ModuleNotFoundError):  # pragma: no cover
+        except Exception:  # pragma: no cover - hardware not available
             continue
     return NullBackend()
 

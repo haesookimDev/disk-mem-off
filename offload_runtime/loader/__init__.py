@@ -2,12 +2,12 @@ from __future__ import annotations
 
 try:
     from .safetensors_storage import SafetensorsStorage
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     SafetensorsStorage = None
 
 try:
     from .huggingface import HuggingFaceLoader, ModelBundle
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     HuggingFaceLoader = None
     ModelBundle = None
 
