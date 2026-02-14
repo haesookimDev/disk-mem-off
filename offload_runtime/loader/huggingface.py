@@ -129,6 +129,14 @@ class ModelBundle:
 class HuggingFaceLoader:
     """Download and parse a HuggingFace model into OffloadRuntime components."""
 
+    _GROUP_FN: dict[str, str] = {
+        "gpt2": "_group_gpt2",
+        "llama": "_group_llama",
+        "glm4": "_group_glm4",
+        "glm4_moe": "_group_glm4_moe",
+        "qwen3_next": "_group_qwen3_next",
+    }
+
     @classmethod
     def load(
         cls,
@@ -139,76 +147,13 @@ class HuggingFaceLoader:
     ) -> ModelBundle:
         if snapshot_download is None:
             raise RuntimeError("huggingface-hub is not installed")
-        if safe_open is None:
-            raise RuntimeError("safetensors is not installed")
-        if np is None:
-            raise RuntimeError("numpy is not installed")
 
         model_dir = Path(snapshot_download(
             model_id,
             cache_dir=cache_dir,
             allow_patterns=["*.safetensors", "*.json", "model.safetensors.index.json"],
         ))
-
-        config = cls._load_config(model_dir)
-        architecture = cls._detect_architecture(config)
-
-        st_files, tensor_to_filename = cls._find_safetensors(model_dir)
-        tensor_to_file: dict[str, Path] = {
-            name: model_dir / fname for name, fname in tensor_to_filename.items()
-        }
-
-        # Build tensor inventory (name → shape, dtype)
-        tensor_info = cls._build_tensor_info(st_files)
-
-        # Group into layers + non-layer tensors
-        if architecture == "gpt2":
-            layers, embed_names, head_names = cls._group_gpt2(config, tensor_info, compute_dtype)
-        elif architecture == "llama":
-            layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
-        elif architecture == "glm4":
-            layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
-        elif architecture == "glm4_moe":
-            layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
-        elif architecture == "qwen3_next":
-            layers, embed_names, head_names = cls._group_qwen3_next(config, tensor_info, compute_dtype)
-        else:
-            raise ValueError(f"Unsupported architecture: {architecture}")
-
-        # Load non-layer weights eagerly
-        embed_weights = cls._load_weights(embed_names, st_files, tensor_to_file, compute_dtype)
-        head_weights = cls._load_weights(head_names, st_files, tensor_to_file, compute_dtype)
-
-        # Handle weight tying
-        if architecture == "gpt2" and "lm_head.weight" not in head_weights:
-            head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]
-        elif architecture in ("llama", "glm4", "glm4_moe", "qwen3_next") and "lm_head.weight" not in head_weights:
-            head_weights["lm_head.weight"] = embed_weights["model.embed_tokens.weight"]
-
-        # Find tokenizer
-        tokenizer_path: Path | None = None
-        for candidate in ["tokenizer.json", "tokenizer.model"]:
-            p = model_dir / candidate
-            if p.exists():
-                tokenizer_path = p
-                break
-
-        storage = SafetensorsStorage(
-            safetensors_paths=st_files,
-            layer_specs=layers,
-            tensor_to_file=tensor_to_file,
-            compute_dtype=compute_dtype,
-        )
-
-        return ModelBundle(
-            architecture=architecture,
-            config=config,
-            layers=layers,
-            storage=storage,
-            embed_weights=embed_weights,
-            head_weights=head_weights,
-            tokenizer_path=tokenizer_path,
-        )
+        return cls._build_bundle(model_dir, compute_dtype=compute_dtype)
 
     @classmethod
     def load_from_dir(
@@ -218,12 +163,16 @@ class HuggingFaceLoader:
         compute_dtype: str = "float32",
     ) -> ModelBundle:
         """Load from a local directory (no download). Useful for testing."""
+        return cls._build_bundle(Path(model_dir), compute_dtype=compute_dtype)
+
+    @classmethod
+    def _build_bundle(cls, model_dir: Path, *, compute_dtype: str) -> ModelBundle:
+        """Shared logic for load() and load_from_dir()."""
         if safe_open is None:
             raise RuntimeError("safetensors is not installed")
         if np is None:
             raise RuntimeError("numpy is not installed")
 
-        model_dir = Path(model_dir)
         config = cls._load_config(model_dir)
         architecture = cls._detect_architecture(config)
 
@@ -234,18 +183,11 @@ class HuggingFaceLoader:
 
         tensor_info = cls._build_tensor_info(st_files)
 
-        if architecture == "gpt2":
-            layers, embed_names, head_names = cls._group_gpt2(config, tensor_info, compute_dtype)
-        elif architecture == "llama":
-            layers, embed_names, head_names = cls._group_llama(config, tensor_info, compute_dtype)
-        elif architecture == "glm4":
-            layers, embed_names, head_names = cls._group_glm4(config, tensor_info, compute_dtype)
-        elif architecture == "glm4_moe":
-            layers, embed_names, head_names = cls._group_glm4_moe(config, tensor_info, compute_dtype)
-        elif architecture == "qwen3_next":
-            layers, embed_names, head_names = cls._group_qwen3_next(config, tensor_info, compute_dtype)
-        else:
+        group_fn_name = cls._GROUP_FN.get(architecture)
+        if group_fn_name is None:
             raise ValueError(f"Unsupported architecture: {architecture}")
+        group_fn = getattr(cls, group_fn_name)
+        layers, embed_names, head_names = group_fn(config, tensor_info, compute_dtype)
 
         embed_weights = cls._load_weights(embed_names, st_files, tensor_to_file, compute_dtype)
         head_weights = cls._load_weights(head_names, st_files, tensor_to_file, compute_dtype)

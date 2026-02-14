@@ -124,3 +124,23 @@ def repeat_kv(x: Any, n_rep: int) -> Any:
     if n_rep == 1:
         return x
     return np.repeat(x, n_rep, axis=0)
+
+
+def rms_norm_no_weight(x: Any, eps: float = 1e-6) -> Any:
+    """RMS normalization without learnable weight (for QK norm)."""
+    rms = np.sqrt(np.mean(x ** 2, axis=-1, keepdims=True) + eps)
+    return x / rms
+
+
+def partial_rope(
+    q: Any, k: Any, positions: Any, head_dim: int,
+    rotary_dim: int, base: float,
+) -> tuple[Any, Any]:
+    """Apply RoPE only to the first rotary_dim dimensions."""
+    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
+    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+    q_rot, k_rot = rope(q_rot, k_rot, positions, rotary_dim, base)
+    return (
+        np.concatenate([q_rot, q_pass], axis=-1),
+        np.concatenate([k_rot, k_pass], axis=-1),
+    )

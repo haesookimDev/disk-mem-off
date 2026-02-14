@@ -14,33 +14,9 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _readback_device, _unpack_tensors, linear_t, np, repeat_kv, rms_norm, rope,
-    silu, softmax,
+    _readback_device, _unpack_tensors, linear_t, np, partial_rope,
+    repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers shared with GLM4MoE (replicated to avoid cross-executor coupling)
-# ---------------------------------------------------------------------------
-
-def _rms_norm_no_weight(x: Any, eps: float = 1e-6) -> Any:
-    """RMS normalization without learnable weight (for QK norm)."""
-    rms = np.sqrt(np.mean(x ** 2, axis=-1, keepdims=True) + eps)
-    return x / rms
-
-
-def _partial_rope(
-    q: Any, k: Any, positions: Any, head_dim: int,
-    rotary_dim: int, base: float,
-) -> tuple[Any, Any]:
-    """Apply RoPE only to the first rotary_dim dimensions."""
-    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
-    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
-    q_rot, k_rot = rope(q_rot, k_rot, positions, rotary_dim, base)
-    return (
-        np.concatenate([q_rot, q_pass], axis=-1),
-        np.concatenate([k_rot, k_pass], axis=-1),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,14 +180,14 @@ class Qwen3NextExecutor:
 
         # QK normalization
         if "self_attn.q_norm.weight" in t:
-            q = _rms_norm_no_weight(q, self.rms_norm_eps) * t["self_attn.q_norm.weight"]
+            q = rms_norm_no_weight(q, self.rms_norm_eps) * t["self_attn.q_norm.weight"]
         if "self_attn.k_norm.weight" in t:
-            k = _rms_norm_no_weight(k, self.rms_norm_eps) * t["self_attn.k_norm.weight"]
+            k = rms_norm_no_weight(k, self.rms_norm_eps) * t["self_attn.k_norm.weight"]
 
         # Partial RoPE
         positions = np.arange(seq_len, dtype=np.float32)
         if self.rotary_dim < head_dim:
-            q, k = _partial_rope(q, k, positions, head_dim, self.rotary_dim, self.rope_theta)
+            q, k = partial_rope(q, k, positions, head_dim, self.rotary_dim, self.rope_theta)
         else:
             q, k = rope(q, k, positions, head_dim, self.rope_theta)
 

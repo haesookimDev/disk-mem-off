@@ -5,6 +5,11 @@ from typing import Any, Protocol
 
 from offload_runtime.types import HostBuffer, LayerSpec
 
+try:
+    import numpy as np
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
+    np = None
+
 
 class Dequantizer(Protocol):
     """Converts quantized HostBuffer data to full-precision before H2D transfer."""
@@ -34,6 +39,10 @@ class Int8Dequantizer:
     def dequantize(self, layer: LayerSpec, buf: HostBuffer) -> HostBuffer:
         scale = layer.metadata.get("scale", 1.0)
         zero_point = layer.metadata.get("zero_point", 0)
+        if np is not None:
+            arr = np.frombuffer(buf.view, dtype=np.int8)
+            result = (arr.astype(np.float32) - zero_point) * scale
+            return HostBuffer(view=memoryview(result.tobytes()), pinned=False)
         raw = buf.view.tobytes()
         values = struct.unpack(f"{len(raw)}b", raw)
         float_values = [(v - zero_point) * scale for v in values]
@@ -55,6 +64,10 @@ class Float16Dequantizer:
         return layer.nbytes * 2  # float16 -> float32
 
     def dequantize(self, layer: LayerSpec, buf: HostBuffer) -> HostBuffer:
+        if np is not None:
+            arr = np.frombuffer(buf.view, dtype=np.float16)
+            result = arr.astype(np.float32)
+            return HostBuffer(view=memoryview(result.tobytes()), pinned=False)
         raw = buf.view.tobytes()
         half_count = len(raw) // 2
         half_values = struct.unpack(f"{half_count}e", raw)
