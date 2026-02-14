@@ -175,6 +175,19 @@ class HuggingFaceLoader:
         if np is None:
             raise RuntimeError("numpy is not installed")
 
+        # Disk space check
+        try:
+            free = shutil.disk_usage(model_dir).free
+            total_model = sum(p.stat().st_size for p in model_dir.glob("*.safetensors"))
+            if total_model > 0 and free < total_model * 0.1:
+                warnings.warn(
+                    f"Low disk space: {free / 1e9:.1f}GB free, model {total_model / 1e9:.1f}GB",
+                    ResourceWarning,
+                    stacklevel=3,
+                )
+        except OSError:
+            pass
+
         config = cls._load_config(model_dir)
         architecture = cls._detect_architecture(config)
 
