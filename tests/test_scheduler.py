@@ -6,12 +6,20 @@ from offload_runtime.scheduler.lookahead import LookaheadScheduler
 
 
 class TestLookaheadScheduler:
-    def test_invalid_lookahead_zero(self) -> None:
-        with pytest.raises(ValueError, match="lookahead must be >= 1"):
-            LookaheadScheduler(lookahead=0)
+    def test_lookahead_zero_is_valid(self) -> None:
+        sched = LookaheadScheduler(lookahead=0)
+        assert sched.lookahead == 0
+
+    def test_lookahead_zero_warmup_empty(self) -> None:
+        sched = LookaheadScheduler(lookahead=0)
+        assert sched.warmup_prefetch_ids([1, 2, 3]) == []
+
+    def test_lookahead_zero_next_returns_none(self) -> None:
+        sched = LookaheadScheduler(lookahead=0)
+        assert sched.next_prefetch_id([1, 2, 3], 0) is None
 
     def test_invalid_lookahead_negative(self) -> None:
-        with pytest.raises(ValueError, match="lookahead must be >= 1"):
+        with pytest.raises(ValueError, match="lookahead must be >= 0"):
             LookaheadScheduler(lookahead=-1)
 
     def test_warmup_returns_first_w_layers(self) -> None:

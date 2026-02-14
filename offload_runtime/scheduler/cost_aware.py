@@ -30,8 +30,8 @@ class CostAwareScheduler:
     _costs: dict[int, LayerCostEstimate] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.min_lookahead < 1:
-            raise ValueError("min_lookahead must be >= 1")
+        if self.min_lookahead < 0:
+            raise ValueError("min_lookahead must be >= 0")
         if self.max_lookahead < self.min_lookahead:
             raise ValueError("max_lookahead must be >= min_lookahead")
         if not (0.0 < self.ema_alpha <= 1.0):
@@ -92,6 +92,8 @@ class CostAwareScheduler:
         self, ordered_layer_ids: list[int], current_index: int
     ) -> int | None:
         lookahead = self._effective_lookahead(ordered_layer_ids, current_index)
+        if lookahead == 0:
+            return None
         next_index = current_index + lookahead
         if next_index >= len(ordered_layer_ids):
             return None

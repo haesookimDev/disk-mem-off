@@ -4,6 +4,7 @@ import gc
 import json
 import mmap
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +37,7 @@ class ShardedMMapStorage:
     }
     """
 
-    def __init__(self, root: str | Path, index_path: str | Path, max_workers: int = 1) -> None:
+    def __init__(self, root: str | Path, index_path: str | Path, max_workers: int = 2) -> None:
         self.root = Path(root)
         self.index_path = Path(index_path)
         self._entries = self._load_index(self.index_path)
@@ -46,6 +47,7 @@ class ShardedMMapStorage:
         self._futures: dict[int, Future[HostBuffer]] = {}
         self._ready: dict[int, HostBuffer] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=max_workers)
+        self._disk_read_ms: dict[int, float] = {}
 
     def __enter__(self) -> "ShardedMMapStorage":
         return self
@@ -79,8 +81,13 @@ class ShardedMMapStorage:
         entry = self._entries[layer_id]
         with self._lock:
             mm = self._mmap_for(entry.path)
+        t0 = time.perf_counter()
         data = bytes(mm[entry.offset : entry.offset + entry.nbytes])
+        self._disk_read_ms[layer_id] = (time.perf_counter() - t0) * 1000.0
         return HostBuffer(view=memoryview(data), pinned=False)
+
+    def get_disk_read_ms(self, layer_id: int) -> float:
+        return self._disk_read_ms.get(layer_id, 0.0)
 
     def request(self, layer_id: int) -> None:
         if layer_id in self._futures or layer_id in self._ready:

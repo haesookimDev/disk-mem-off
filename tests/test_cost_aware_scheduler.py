@@ -67,9 +67,21 @@ class TestCostAwareScheduler:
         ids = [0, 1, 2, 3, 4]
         assert sched.next_prefetch_id(ids, 0) == 3  # max_lookahead=3
 
-    def test_validation_min_lookahead(self) -> None:
-        with pytest.raises(ValueError, match="min_lookahead must be >= 1"):
-            CostAwareScheduler(min_lookahead=0)
+    def test_min_lookahead_zero_is_valid(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
+        assert sched.min_lookahead == 0
+
+    def test_min_lookahead_zero_warmup_empty(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
+        assert sched.warmup_prefetch_ids([0, 1, 2]) == []
+
+    def test_min_lookahead_zero_cold_returns_none(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
+        assert sched.next_prefetch_id([0, 1, 2], 0) is None
+
+    def test_validation_min_lookahead_negative(self) -> None:
+        with pytest.raises(ValueError, match="min_lookahead must be >= 0"):
+            CostAwareScheduler(min_lookahead=-1)
 
     def test_validation_max_lt_min(self) -> None:
         with pytest.raises(ValueError, match="max_lookahead must be >= min_lookahead"):

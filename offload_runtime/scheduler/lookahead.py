@@ -8,13 +8,15 @@ class LookaheadScheduler:
     lookahead: int = 1
 
     def __post_init__(self) -> None:
-        if self.lookahead < 1:
-            raise ValueError("lookahead must be >= 1")
+        if self.lookahead < 0:
+            raise ValueError("lookahead must be >= 0")
 
     def warmup_prefetch_ids(self, ordered_layer_ids: list[int]) -> list[int]:
         return ordered_layer_ids[: self.lookahead]
 
     def next_prefetch_id(self, ordered_layer_ids: list[int], current_index: int) -> int | None:
+        if self.lookahead == 0:
+            return None
         next_index = current_index + self.lookahead
         if next_index >= len(ordered_layer_ids):
             return None

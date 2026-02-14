@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ class SafetensorsStorage:
         tensor_to_file: dict[str, Path],
         *,
         compute_dtype: str = "float32",
-        max_workers: int = 1,
+        max_workers: int = 2,
     ) -> None:
         self._safetensors_paths = safetensors_paths
         self._layer_specs: dict[int, LayerSpec] = {s.layer_id: s for s in layer_specs}
@@ -49,6 +50,7 @@ class SafetensorsStorage:
         self._futures: dict[int, Future[HostBuffer]] = {}
         self._ready: dict[int, HostBuffer] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=max_workers)
+        self._disk_read_ms: dict[int, float] = {}
 
     # -- Context manager --
 
@@ -75,23 +77,38 @@ class SafetensorsStorage:
 
         buf = bytearray(spec.nbytes)
 
+        # Batch handle resolution: acquire lock once instead of per-tensor
+        handles_needed: dict[Path, Any] = {}
         for meta in tensor_meta:
             full_name = f"{full_prefix}{meta['name']}" if full_prefix else meta["name"]
             file_path = self._tensor_to_file[full_name]
+            if file_path not in handles_needed:
+                handles_needed[file_path] = None
+        with self._lock:
+            for path in handles_needed:
+                handles_needed[path] = self._get_handle(path)
 
-            with self._lock:
-                handle = self._get_handle(file_path)
+        t0 = time.perf_counter()
+        target_dtype = np.dtype(self._compute_dtype)
+        for meta in tensor_meta:
+            full_name = f"{full_prefix}{meta['name']}" if full_prefix else meta["name"]
+            file_path = self._tensor_to_file[full_name]
+            handle = handles_needed[file_path]
 
             arr = handle.get_tensor(full_name)
-            target_dtype = np.dtype(self._compute_dtype)
             if arr.dtype != target_dtype:
                 arr = arr.astype(target_dtype)
 
-            raw = arr.tobytes()
+            nbytes = arr.nbytes
             offset = meta["offset"]
-            buf[offset : offset + len(raw)] = raw
+            dest = np.frombuffer(buf, dtype=np.uint8, count=nbytes, offset=offset)
+            np.copyto(dest, arr.view(np.uint8).ravel())
 
-        return HostBuffer(view=memoryview(bytes(buf)), pinned=False)
+        self._disk_read_ms[layer_id] = (time.perf_counter() - t0) * 1000.0
+        return HostBuffer(view=memoryview(buf), pinned=False)
+
+    def get_disk_read_ms(self, layer_id: int) -> float:
+        return self._disk_read_ms.get(layer_id, 0.0)
 
     # -- LayerStorage protocol --
 

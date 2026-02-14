@@ -7,8 +7,13 @@ from .runtime import LayerExecutor, LayerMetrics, OffloadRuntime, RuntimeMetrics
 from .scheduler import (
     BlockScheduler,
     CostAwareScheduler,
+    LayerFeedback,
+    LayerSizeInfo,
     LookaheadScheduler,
     PrefetchScheduler,
+    ResourceAwareScheduler,
+    ResourceContext,
+    ResourceSnapshot,
     ReverseLookaheadScheduler,
 )
 from .storage import InMemoryStorage, LayerStorage, ShardedMMapStorage
@@ -53,7 +58,9 @@ __all__ = [
     "InMemoryStorage",
     "Int8Dequantizer",
     "LayerExecutor",
+    "LayerFeedback",
     "LayerMetrics",
+    "LayerSizeInfo",
     "LayerSpec",
     "LayerStorage",
     "LlamaExecutor",
@@ -67,6 +74,9 @@ __all__ = [
     "PinnedHostBufferPool",
     "PrefetchScheduler",
     "Qwen3NextExecutor",
+    "ResourceAwareScheduler",
+    "ResourceContext",
+    "ResourceSnapshot",
     "ReverseLookaheadScheduler",
     "ROCmBackend",
     "RuntimeMetrics",

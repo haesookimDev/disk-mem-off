@@ -6,9 +6,21 @@ from offload_runtime.scheduler.reverse_scheduler import ReverseLookaheadSchedule
 
 
 class TestReverseLookaheadScheduler:
-    def test_invalid_lookahead(self) -> None:
-        with pytest.raises(ValueError, match="lookahead must be >= 1"):
-            ReverseLookaheadScheduler(lookahead=0)
+    def test_lookahead_zero_is_valid(self) -> None:
+        sched = ReverseLookaheadScheduler(lookahead=0)
+        assert sched.lookahead == 0
+
+    def test_lookahead_zero_warmup_empty(self) -> None:
+        sched = ReverseLookaheadScheduler(lookahead=0)
+        assert sched.warmup_prefetch_ids([4, 3, 2, 1, 0]) == []
+
+    def test_lookahead_zero_next_returns_none(self) -> None:
+        sched = ReverseLookaheadScheduler(lookahead=0)
+        assert sched.next_prefetch_id([4, 3, 2, 1, 0], 0) is None
+
+    def test_invalid_lookahead_negative(self) -> None:
+        with pytest.raises(ValueError, match="lookahead must be >= 0"):
+            ReverseLookaheadScheduler(lookahead=-1)
 
     def test_warmup_returns_first_w_layers(self) -> None:
         sched = ReverseLookaheadScheduler(lookahead=2)

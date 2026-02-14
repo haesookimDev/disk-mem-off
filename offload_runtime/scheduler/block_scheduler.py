@@ -17,8 +17,8 @@ class BlockScheduler:
     def __post_init__(self) -> None:
         if self.block_size < 1:
             raise ValueError("block_size must be >= 1")
-        if self.lookahead < 1:
-            raise ValueError("lookahead must be >= 1")
+        if self.lookahead < 0:
+            raise ValueError("lookahead must be >= 0")
 
     def _blocks(self, ordered_layer_ids: list[int]) -> list[list[int]]:
         return [
@@ -34,6 +34,8 @@ class BlockScheduler:
         return result
 
     def next_prefetch_id(self, ordered_layer_ids: list[int], current_index: int) -> int | None:
+        if self.lookahead == 0:
+            return None
         blocks = self._blocks(ordered_layer_ids)
         current_block_idx = current_index // self.block_size
         position_in_block = current_index % self.block_size
@@ -48,6 +50,8 @@ class BlockScheduler:
         return blocks[target_block_idx][0]
 
     def get_block_prefetch_ids(self, ordered_layer_ids: list[int], current_index: int) -> list[int]:
+        if self.lookahead == 0:
+            return []
         blocks = self._blocks(ordered_layer_ids)
         current_block_idx = current_index // self.block_size
         position_in_block = current_index % self.block_size

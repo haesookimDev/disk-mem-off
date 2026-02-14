@@ -10,9 +10,22 @@ class TestBlockScheduler:
         with pytest.raises(ValueError, match="block_size must be >= 1"):
             BlockScheduler(block_size=0)
 
-    def test_invalid_lookahead(self) -> None:
-        with pytest.raises(ValueError, match="lookahead must be >= 1"):
-            BlockScheduler(block_size=2, lookahead=0)
+    def test_lookahead_zero_is_valid(self) -> None:
+        sched = BlockScheduler(block_size=2, lookahead=0)
+        assert sched.lookahead == 0
+
+    def test_lookahead_zero_warmup_empty(self) -> None:
+        sched = BlockScheduler(block_size=2, lookahead=0)
+        assert sched.warmup_prefetch_ids([0, 1, 2, 3]) == []
+
+    def test_lookahead_zero_next_returns_none(self) -> None:
+        sched = BlockScheduler(block_size=2, lookahead=0)
+        ids = [0, 1, 2, 3]
+        assert sched.next_prefetch_id(ids, 1) is None
+
+    def test_invalid_lookahead_negative(self) -> None:
+        with pytest.raises(ValueError, match="lookahead must be >= 0"):
+            BlockScheduler(block_size=2, lookahead=-1)
 
     def test_warmup_single_block(self) -> None:
         sched = BlockScheduler(block_size=2, lookahead=1)

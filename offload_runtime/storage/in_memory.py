@@ -22,3 +22,6 @@ class InMemoryStorage:
     def release(self, layer_id: int) -> None:
         _ = layer_id
 
+    def get_disk_read_ms(self, layer_id: int) -> float:
+        return 0.0
+
