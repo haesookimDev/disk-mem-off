@@ -90,25 +90,31 @@ class ShardedMMapStorage:
         return self._disk_read_ms.get(layer_id, 0.0)
 
     def request(self, layer_id: int) -> None:
-        if layer_id in self._futures or layer_id in self._ready:
-            return
-        future = self._thread_pool.submit(self._load_layer, layer_id)
-        self._futures[layer_id] = future
+        with self._lock:
+            if layer_id in self._futures or layer_id in self._ready:
+                return
+            future = self._thread_pool.submit(self._load_layer, layer_id)
+            self._futures[layer_id] = future
 
     def wait(self, layer_id: int) -> None:
-        future = self._futures.pop(layer_id, None)
+        with self._lock:
+            future = self._futures.pop(layer_id, None)
         if future is not None:
-            self._ready[layer_id] = future.result()
+            result = future.result()
+            with self._lock:
+                self._ready[layer_id] = result
 
     def get(self, layer_id: int) -> HostBuffer:
-        buf = self._ready.pop(layer_id, None)
+        with self._lock:
+            buf = self._ready.pop(layer_id, None)
         if buf is not None:
             return buf
         return self._load_layer(layer_id)
 
     def release(self, layer_id: int) -> None:
-        self._ready.pop(layer_id, None)
-        future = self._futures.pop(layer_id, None)
+        with self._lock:
+            self._ready.pop(layer_id, None)
+            future = self._futures.pop(layer_id, None)
         if future is not None:
             future.cancel()
 
