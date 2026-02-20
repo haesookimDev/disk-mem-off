@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import struct
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -17,6 +19,22 @@ try:
     import numpy as np
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     np = None
+
+
+def _read_bf16_as_float32(path: Path, tensor_name: str) -> Any:
+    """Read a bfloat16 tensor from a safetensors file and return as float32."""
+    with open(path, "rb") as f:
+        header_size = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(header_size))
+    meta = header[tensor_name]
+    data_start = 8 + header_size
+    start, end = meta["data_offsets"]
+    with open(path, "rb") as f:
+        f.seek(data_start + start)
+        raw = f.read(end - start)
+    bf16 = np.frombuffer(raw, dtype=np.uint16)
+    f32 = bf16.astype(np.uint32) << 16
+    return f32.view(np.float32).reshape(meta["shape"])
 
 
 class SafetensorsStorage:
@@ -95,7 +113,11 @@ class SafetensorsStorage:
             file_path = self._tensor_to_file[full_name]
             handle = handles_needed[file_path]
 
-            arr = handle.get_tensor(full_name)
+            try:
+                arr = handle.get_tensor(full_name)
+            except TypeError:
+                # bfloat16 not supported by numpy — read raw and convert
+                arr = _read_bf16_as_float32(file_path, full_name)
             if arr.dtype != target_dtype:
                 arr = arr.astype(target_dtype)
 

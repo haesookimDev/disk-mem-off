@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import struct
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,12 +26,22 @@ try:
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     np = None
 
-from offload_runtime.loader.safetensors_storage import SafetensorsStorage
+from offload_runtime.loader.safetensors_storage import SafetensorsStorage, _read_bf16_as_float32
 
 
 _DTYPE_ITEMSIZE: dict[str, int] = {
     "float16": 2, "float32": 4, "float64": 8,
-    "bfloat16": 2, "int8": 1, "int16": 2, "int32": 4, "int64": 8,
+    "bfloat16": 2,
+    "int8": 1, "int16": 2, "int32": 4, "int64": 8,
+    "uint8": 1,
+}
+
+# Safetensors header dtype strings → numpy-compatible dtype strings.
+_SAFETENSORS_DTYPE: dict[str, str] = {
+    "F16": "float16", "BF16": "bfloat16", "F32": "float32", "F64": "float64",
+    "I8": "int8", "I16": "int16", "I32": "int32", "I64": "int64",
+    "U8": "uint8", "U16": "uint16", "U32": "uint32", "U64": "uint64",
+    "BOOL": "bool",
 }
 
 _SUPPORTED_ARCHITECTURES: dict[str, str] = {
@@ -281,21 +292,30 @@ class HuggingFaceLoader:
             "Expected model.safetensors or model.safetensors.index.json"
         )
 
+    @staticmethod
+    def _parse_safetensors_header(path: Path) -> dict[str, Any]:
+        """Read the JSON header from a safetensors file (no tensor data loaded)."""
+        with open(path, "rb") as f:
+            header_size = struct.unpack("<Q", f.read(8))[0]
+            return json.loads(f.read(header_size))
+
     @classmethod
     def _build_tensor_info(
         cls, st_files: list[Path],
     ) -> dict[str, dict[str, Any]]:
-        """Map tensor name → {shape, dtype} by inspecting all safetensors files."""
+        """Map tensor name → {shape, dtype} by inspecting safetensors headers."""
         info: dict[str, dict[str, Any]] = {}
         seen_files: set[Path] = set()
         for path in st_files:
             if path in seen_files:
                 continue
             seen_files.add(path)
-            handle = safe_open(str(path), framework="numpy")
-            for name in handle.keys():
-                tensor = handle.get_tensor(name)
-                info[name] = {"shape": list(tensor.shape), "dtype": str(tensor.dtype)}
+            header = cls._parse_safetensors_header(path)
+            for name, meta in header.items():
+                if name == "__metadata__":
+                    continue
+                dtype_str = _SAFETENSORS_DTYPE.get(meta["dtype"], meta["dtype"])
+                info[name] = {"shape": meta["shape"], "dtype": dtype_str}
         return info
 
     @classmethod
@@ -586,7 +606,10 @@ class HuggingFaceLoader:
             path = tensor_to_file[name]
             if path not in handles:
                 handles[path] = safe_open(str(path), framework="numpy")
-            arr = handles[path].get_tensor(name)
+            try:
+                arr = handles[path].get_tensor(name)
+            except TypeError:
+                arr = _read_bf16_as_float32(path, name)
             if arr.dtype != target_dtype:
                 arr = arr.astype(target_dtype)
             result[name] = arr
