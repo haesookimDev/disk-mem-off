@@ -15,12 +15,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
+
+log = logging.getLogger("api_server")
+
+
+def _json(obj: Any) -> str:
+    """JSON encode with UTF-8 characters preserved (no \\uXXXX escapes)."""
+    return json.dumps(obj, ensure_ascii=False)
 
 try:
     import numpy as np
@@ -86,6 +94,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--compute-dtype", default="float32")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--log-level",
+        default="info",
+        choices=["debug", "info", "warning", "error"],
+        help="Logging level (default: info)",
+    )
     return parser.parse_args()
 
 
@@ -288,6 +302,9 @@ def _forward_step(
     top_p: float,
 ) -> int:
     """One autoregressive step: embed -> layers -> head -> sample."""
+    t0 = time.perf_counter()
+    seq_len = len(token_ids)
+
     if bundle.architecture == "gpt2":
         hidden = executor.embed(
             token_ids,
@@ -299,8 +316,10 @@ def _forward_step(
             token_ids,
             bundle.embed_weights["model.embed_tokens.weight"],
         )
+    t_embed = time.perf_counter()
 
-    hidden, _ = runtime.run_inference(layer_ids, inputs=hidden)
+    hidden, metrics = runtime.run_inference(layer_ids, inputs=hidden)
+    t_layers = time.perf_counter()
 
     if bundle.architecture == "gpt2":
         logits = executor.lm_head(
@@ -315,8 +334,21 @@ def _forward_step(
             bundle.head_weights["model.norm.weight"],
             bundle.head_weights["lm_head.weight"],
         )
+    t_head = time.perf_counter()
 
-    return _sample(logits[-1], temperature, top_p)
+    token = _sample(logits[-1], temperature, top_p)
+    total_ms = (t_head - t0) * 1000
+    log.debug(
+        "forward step: seq_len=%d  embed=%.1fms  layers=%.1fms (%.1fMB xfer)  head=%.1fms  total=%.1fms  -> token=%d",
+        seq_len,
+        (t_embed - t0) * 1000,
+        (t_layers - t_embed) * 1000,
+        metrics.transferred_bytes / 1e6,
+        (t_head - t_layers) * 1000,
+        total_ms,
+        token,
+    )
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +376,10 @@ async def _generate_tokens(
     req: InferenceRequest,
 ) -> None:
     token_ids = list(req.token_ids)
-    for _ in range(req.max_tokens):
+    gen_start = time.perf_counter()
+    log.debug("generation start: prompt_tokens=%d  max_tokens=%d  temp=%.2f  top_p=%.2f",
+              len(token_ids), req.max_tokens, req.temperature, req.top_p)
+    for step in range(req.max_tokens):
         next_token = await asyncio.to_thread(
             _forward_step,
             bundle,
@@ -358,7 +393,12 @@ async def _generate_tokens(
         token_ids.append(next_token)
         await req.output_queue.put(next_token)
         if next_token in req.stop_token_ids:
+            log.debug("EOS token %d at step %d", next_token, step + 1)
             break
+    elapsed = time.perf_counter() - gen_start
+    gen_count = len(token_ids) - len(req.token_ids)
+    tps = gen_count / elapsed if elapsed > 0 else 0
+    log.info("generation done: %d tokens in %.2fs (%.2f tok/s)", gen_count, elapsed, tps)
     await req.output_queue.put(None)
 
 
@@ -371,9 +411,12 @@ async def _inference_worker(
 ) -> None:
     while True:
         req = await queue.get()
+        qsize = queue.qsize()
+        log.debug("worker: picked request (queue remaining: %d)", qsize)
         try:
             await _generate_tokens(bundle, runtime, executor, layer_ids, req)
         except Exception as exc:
+            log.error("worker: generation failed: %s", exc, exc_info=True)
             await req.output_queue.put(exc)
         finally:
             queue.task_done()
@@ -402,7 +445,7 @@ async def _openai_stream(
                 {"index": 0, "delta": delta, "finish_reason": finish},
             ],
         }
-        return f"data: {json.dumps(obj)}\n\n"
+        return f"data: {_json(obj)}\n\n"
 
     yield _chunk({"role": "assistant", "content": ""}, None)
 
@@ -432,7 +475,7 @@ async def _anthropic_stream(
     eos_ids: set[int],
 ) -> AsyncGenerator[str, None]:
     def _evt(event: str, data: dict[str, Any]) -> str:
-        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+        return f"event: {event}\ndata: {_json(data)}\n\n"
 
     output_count = 0
 
@@ -514,11 +557,21 @@ async def _submit_request(
     max_tokens: int,
     temperature: float,
     top_p: float,
+    *,
+    endpoint: str = "",
+    request_id: str = "",
+    stream: bool = False,
 ) -> tuple[InferenceRequest, int]:
     """Tokenize messages and submit an inference request to the queue."""
     prompt_text = _format_chat_messages(messages, _bundle.tokenizer_path)
     token_ids = _tokenizer.encode(prompt_text).ids
     prompt_count = len(token_ids)
+
+    log.info(
+        "[%s] %s request: messages=%d  prompt_tokens=%d  max_tokens=%d  stream=%s  temp=%.2f  top_p=%.2f",
+        request_id, endpoint, len(messages), prompt_count, max_tokens, stream, temperature, top_p,
+    )
+    log.debug("[%s] prompt text:\n%s", request_id, prompt_text[:500])
 
     req = InferenceRequest(
         token_ids=list(token_ids),
@@ -528,6 +581,7 @@ async def _submit_request(
         stop_token_ids=_eos_token_ids,
     )
     await _inference_queue.put(req)
+    log.debug("[%s] queued (queue size: %d)", request_id, _inference_queue.qsize())
     return req, prompt_count
 
 
@@ -636,14 +690,15 @@ async def list_models() -> dict[str, Any]:
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(body: OpenAIChatRequest):
-    messages = [m.model_dump() for m in body.messages]
-    req, prompt_count = await _submit_request(
-        messages, body.max_tokens, body.temperature, body.top_p,
-    )
-
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
     model = body.model or _model_id
+
+    messages = [m.model_dump() for m in body.messages]
+    req, prompt_count = await _submit_request(
+        messages, body.max_tokens, body.temperature, body.top_p,
+        endpoint="OpenAI", request_id=request_id, stream=body.stream,
+    )
 
     if body.stream:
         return StreamingResponse(
@@ -679,13 +734,14 @@ async def openai_chat_completions(body: OpenAIChatRequest):
 
 @app.post("/v1/messages")
 async def anthropic_messages(body: AnthropicRequest):
+    request_id = f"msg_{uuid.uuid4().hex[:12]}"
+    model = body.model or _model_id
+
     messages = [m.model_dump() for m in body.messages]
     req, prompt_count = await _submit_request(
         messages, body.max_tokens, body.temperature, body.top_p,
+        endpoint="Anthropic", request_id=request_id, stream=body.stream,
     )
-
-    request_id = f"msg_{uuid.uuid4().hex[:12]}"
-    model = body.model or _model_id
 
     if body.stream:
         return StreamingResponse(
@@ -721,6 +777,12 @@ async def anthropic_messages(body: AnthropicRequest):
 def main() -> None:
     global _cli_args
     _cli_args = _parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, _cli_args.log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     import uvicorn
 
