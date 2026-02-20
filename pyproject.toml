@@ -17,6 +17,7 @@ cuda = ["cuda-python"]
 rocm = ["hip-python"]
 mps = ["pyobjc-framework-Metal"]
 inference = ["safetensors", "huggingface-hub", "numpy", "tokenizers"]
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
