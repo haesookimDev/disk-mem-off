@@ -8,8 +8,8 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _readback_device, _unpack_tensors, linear_t, np, repeat_kv, rms_norm, rope,
-    silu, softmax,
+    _readback_device, _unpack_tensors, linear_t, np, partial_rope, repeat_kv,
+    rms_norm, rope, silu, softmax,
 )
 
 LAYER_TENSORS = [
@@ -42,6 +42,8 @@ class GLM4Executor:
         self.intermediate_size: int = config["intermediate_size"]
         self.rms_norm_eps: float = config.get("rms_norm_eps", 1.5625e-7)
         self.rope_theta: float = config.get("rope_theta", 10000.0)
+        self.partial_rotary_factor: float = config.get("partial_rotary_factor", 1.0)
+        self.rotary_dim: int = int(self.head_dim * self.partial_rotary_factor)
 
     # -- LayerExecutor protocol --
 
@@ -80,7 +82,10 @@ class GLM4Executor:
         v = v.reshape(seq_len, n_kv_heads, head_dim).transpose(1, 0, 2)
 
         positions = np.arange(seq_len, dtype=np.float32)
-        q, k = rope(q, k, positions, head_dim, self.rope_theta)
+        if self.rotary_dim < head_dim:
+            q, k = partial_rope(q, k, positions, head_dim, self.rotary_dim, self.rope_theta)
+        else:
+            q, k = rope(q, k, positions, head_dim, self.rope_theta)
 
         n_rep = n_heads // n_kv_heads
         k = repeat_kv(k, n_rep)

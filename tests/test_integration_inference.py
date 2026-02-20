@@ -167,17 +167,19 @@ class TestGPT2EndToEnd:
             assert all(0 <= t < 16 for t in token_ids)
 
 
-def _make_glm4_model(tmp_path: Path) -> Path:
-    rng = np.random.default_rng(456)
+def _make_glm4_model(tmp_path: Path, *, partial_rotary_factor: float | None = None, seed: int = 456) -> Path:
+    rng = np.random.default_rng(seed)
     hidden, heads, kv_heads, layers, inter, vocab = 8, 2, 1, 2, 16, 16
     head_dim = hidden // heads
-    config = {
+    config: dict[str, Any] = {
         "architectures": ["Glm4ForCausalLM"],
         "hidden_size": hidden, "num_attention_heads": heads,
         "num_key_value_heads": kv_heads, "num_hidden_layers": layers,
         "intermediate_size": inter, "vocab_size": vocab,
         "head_dim": head_dim, "rms_norm_eps": 1e-6, "rope_theta": 10000.0,
     }
+    if partial_rotary_factor is not None:
+        config["partial_rotary_factor"] = partial_rotary_factor
     (tmp_path / "config.json").write_text(json.dumps(config))
     tensors: dict[str, Any] = {
         "model.embed_tokens.weight": rng.standard_normal((vocab, hidden)).astype(np.float32),
@@ -613,6 +615,79 @@ class TestGLM4EndToEnd:
 
     def test_autoregressive_generation(self, tmp_path: Path) -> None:
         model_dir = _make_glm4_model(tmp_path)
+        bundle = HuggingFaceLoader.load_from_dir(model_dir)
+        executor = GLM4Executor(bundle.config)
+        layer_ids = [l.layer_id for l in bundle.layers]
+
+        with OffloadRuntime(
+            layers=bundle.layers,
+            backend=NullBackend(),
+            storage=bundle.storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=executor,
+        ) as runtime:
+            token_ids = [0, 1]
+            for _ in range(3):
+                hidden = executor.embed(
+                    token_ids,
+                    bundle.embed_weights["model.embed_tokens.weight"],
+                )
+                hidden, _ = runtime.run_inference(layer_ids, inputs=hidden)
+                logits = executor.lm_head(
+                    hidden,
+                    bundle.head_weights["model.norm.weight"],
+                    bundle.head_weights["lm_head.weight"],
+                )
+                next_token = int(np.argmax(logits[-1]))
+                token_ids.append(next_token)
+
+            assert len(token_ids) == 5
+            assert all(0 <= t < 16 for t in token_ids)
+
+
+class TestGLM4PartialRopeEndToEnd:
+    """End-to-end test for GLM-4 with partial_rotary_factor (GLM-4-9B-0414 style)."""
+
+    def test_full_pipeline(self, tmp_path: Path) -> None:
+        model_dir = _make_glm4_model(tmp_path, partial_rotary_factor=0.5, seed=457)
+        bundle = HuggingFaceLoader.load_from_dir(model_dir)
+        executor = GLM4Executor(bundle.config)
+        layer_ids = [l.layer_id for l in bundle.layers]
+
+        assert executor.partial_rotary_factor == 0.5
+        assert executor.rotary_dim == 2  # head_dim=4 * 0.5
+
+        with OffloadRuntime(
+            layers=bundle.layers,
+            backend=NullBackend(),
+            storage=bundle.storage,
+            scheduler=LookaheadScheduler(lookahead=1),
+            executor=executor,
+        ) as runtime:
+            token_ids = [0, 1, 2]
+            hidden = executor.embed(
+                token_ids,
+                bundle.embed_weights["model.embed_tokens.weight"],
+            )
+            assert hidden.shape == (3, 8)
+
+            hidden, metrics = runtime.run_inference(layer_ids, inputs=hidden)
+            assert hidden.shape == (3, 8)
+            assert metrics.layer_count == 2
+
+            logits = executor.lm_head(
+                hidden,
+                bundle.head_weights["model.norm.weight"],
+                bundle.head_weights["lm_head.weight"],
+            )
+            assert logits.shape == (3, 16)
+            assert np.all(np.isfinite(logits))
+
+            next_token = int(np.argmax(logits[-1]))
+            assert 0 <= next_token < 16
+
+    def test_autoregressive_generation(self, tmp_path: Path) -> None:
+        model_dir = _make_glm4_model(tmp_path, partial_rotary_factor=0.5, seed=457)
         bundle = HuggingFaceLoader.load_from_dir(model_dir)
         executor = GLM4Executor(bundle.config)
         layer_ids = [l.layer_id for l in bundle.layers]
