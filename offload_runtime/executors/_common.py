@@ -21,14 +21,16 @@ def _readback_device(
     device_weights: DeviceBuffer,
     backend: DeviceBackend,
     stream: Any,
-) -> bytes:
-    """Copy bytes back from device memory so we can work with them on the host."""
-    readback = HostBuffer(
-        view=memoryview(bytearray(device_weights.nbytes)),
-        pinned=False,
-    )
+) -> bytearray:
+    """Copy bytes back from device memory so we can work with them on the host.
+
+    Returns a bytearray (not bytes) to avoid a redundant copy.
+    ``np.frombuffer`` works with both bytes and bytearray.
+    """
+    buf = bytearray(device_weights.nbytes)
+    readback = HostBuffer(view=memoryview(buf), pinned=False)
     backend.copy_d2h_async(readback, device_weights, stream)
-    return bytes(readback.view)
+    return buf
 
 
 def _unpack_tensors(
