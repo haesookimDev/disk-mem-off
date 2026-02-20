@@ -157,6 +157,7 @@ class HuggingFaceLoader:
         *,
         cache_dir: str | None = None,
         compute_dtype: str = "float32",
+        embed_dtype: str | None = None,
     ) -> ModelBundle:
         if snapshot_download is None:
             raise RuntimeError("huggingface-hub is not installed")
@@ -166,7 +167,7 @@ class HuggingFaceLoader:
             cache_dir=cache_dir,
             allow_patterns=["*.safetensors", "*.json", "model.safetensors.index.json"],
         ))
-        return cls._build_bundle(model_dir, compute_dtype=compute_dtype)
+        return cls._build_bundle(model_dir, compute_dtype=compute_dtype, embed_dtype=embed_dtype)
 
     @classmethod
     def load_from_dir(
@@ -174,12 +175,13 @@ class HuggingFaceLoader:
         model_dir: str | Path,
         *,
         compute_dtype: str = "float32",
+        embed_dtype: str | None = None,
     ) -> ModelBundle:
         """Load from a local directory (no download). Useful for testing."""
-        return cls._build_bundle(Path(model_dir), compute_dtype=compute_dtype)
+        return cls._build_bundle(Path(model_dir), compute_dtype=compute_dtype, embed_dtype=embed_dtype)
 
     @classmethod
-    def _build_bundle(cls, model_dir: Path, *, compute_dtype: str) -> ModelBundle:
+    def _build_bundle(cls, model_dir: Path, *, compute_dtype: str, embed_dtype: str | None = None) -> ModelBundle:
         """Shared logic for load() and load_from_dir()."""
         if safe_open is None:
             raise RuntimeError("safetensors is not installed")
@@ -215,8 +217,9 @@ class HuggingFaceLoader:
         group_fn = getattr(cls, group_fn_name)
         layers, embed_names, head_names = group_fn(config, tensor_info, compute_dtype)
 
-        embed_weights = cls._load_weights(embed_names, st_files, tensor_to_file, compute_dtype)
-        head_weights = cls._load_weights(head_names, st_files, tensor_to_file, compute_dtype)
+        storage_dtype = embed_dtype if embed_dtype else compute_dtype
+        embed_weights = cls._load_weights(embed_names, st_files, tensor_to_file, storage_dtype)
+        head_weights = cls._load_weights(head_names, st_files, tensor_to_file, storage_dtype)
 
         if architecture == "gpt2" and "lm_head.weight" not in head_weights:
             head_weights["lm_head.weight"] = embed_weights["transformer.wte.weight"]

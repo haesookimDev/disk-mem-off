@@ -16,6 +16,8 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import resource
 import sys
 import time
 import uuid
@@ -29,6 +31,30 @@ log = logging.getLogger("api_server")
 def _json(obj: Any) -> str:
     """JSON encode with UTF-8 characters preserved (no \\uXXXX escapes)."""
     return json.dumps(obj, ensure_ascii=False)
+
+
+def _get_process_rss_gb() -> float:
+    """Return current process RSS in GB (macOS: bytes, Linux: KB)."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return rss / 1e9
+    return rss / 1e6  # Linux: KB
+
+
+def _get_system_memory_gb() -> tuple[float, float]:
+    """Return (total_gb, available_gb). Falls back to (0, 0) on failure."""
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        avail = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+        return total / 1e9, avail / 1e9
+    except (ValueError, OSError):
+        return 0.0, 0.0
+
+
+def _weight_size_gb(weights: dict[str, Any]) -> float:
+    """Sum nbytes of all numpy arrays in a dict."""
+    total = sum(getattr(w, "nbytes", 0) for w in weights.values())
+    return total / 1e9
 
 try:
     import numpy as np
@@ -92,6 +118,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--compute-dtype", default="float32")
+    parser.add_argument(
+        "--embed-dtype",
+        default="float16",
+        choices=["float16", "float32"],
+        help="Dtype for embed/head weights in RAM (float16 saves ~50%% memory)",
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(
@@ -338,16 +370,30 @@ def _forward_step(
 
     token = _sample(logits[-1], temperature, top_p)
     total_ms = (t_head - t0) * 1000
+    layers_ms = (t_layers - t_embed) * 1000
+    xfer_mb = metrics.transferred_bytes / 1e6
+    rss_gb = _get_process_rss_gb()
     log.debug(
-        "forward step: seq_len=%d  embed=%.1fms  layers=%.1fms (%.1fMB xfer)  head=%.1fms  total=%.1fms  -> token=%d",
+        "forward: seq=%d  embed=%.1fms  layers=%.1fms (%d layers, %.0fMB xfer, %.1fGB/s)  head=%.1fms  total=%.1fms  RSS=%.2fGB  -> token=%d",
         seq_len,
         (t_embed - t0) * 1000,
-        (t_layers - t_embed) * 1000,
-        metrics.transferred_bytes / 1e6,
+        layers_ms,
+        len(layer_ids),
+        xfer_mb,
+        (xfer_mb / 1e3) / (layers_ms / 1e3) if layers_ms > 0 else 0,
         (t_head - t_layers) * 1000,
         total_ms,
+        rss_gb,
         token,
     )
+    # Per-layer breakdown at trace level
+    if log.isEnabledFor(logging.DEBUG):
+        for lm in metrics.layer_metrics:
+            log.debug(
+                "  layer %02d: disk=%.0fms  stall=%.0fms  h2d=%.0fms  compute=%.0fms  size=%.0fMB",
+                lm.layer_id, lm.disk_read_ms, lm.stall_ms, lm.h2d_ms, lm.compute_ms,
+                lm.nbytes / 1e6,
+            )
     return token
 
 
@@ -379,6 +425,7 @@ async def _generate_tokens(
     gen_start = time.perf_counter()
     log.debug("generation start: prompt_tokens=%d  max_tokens=%d  temp=%.2f  top_p=%.2f",
               len(token_ids), req.max_tokens, req.temperature, req.top_p)
+    prompt_len = len(token_ids)
     for step in range(req.max_tokens):
         next_token = await asyncio.to_thread(
             _forward_step,
@@ -392,11 +439,23 @@ async def _generate_tokens(
         )
         token_ids.append(next_token)
         await req.output_queue.put(next_token)
+
+        # Progress log every token
+        elapsed = time.perf_counter() - gen_start
+        gen_count = step + 1
+        tps = gen_count / elapsed if elapsed > 0 else 0
+        remaining = (req.max_tokens - gen_count) / tps if tps > 0 else 0
+        log.info(
+            "token %d/%d  (%.2f tok/s, elapsed=%.1fs, ETA=%.0fs, RSS=%.2fGB)",
+            gen_count, req.max_tokens, tps, elapsed, remaining, _get_process_rss_gb(),
+        )
+
         if next_token in req.stop_token_ids:
-            log.debug("EOS token %d at step %d", next_token, step + 1)
+            log.info("EOS token %d at step %d", next_token, step + 1)
             break
+
     elapsed = time.perf_counter() - gen_start
-    gen_count = len(token_ids) - len(req.token_ids)
+    gen_count = len(token_ids) - prompt_len
     tps = gen_count / elapsed if elapsed > 0 else 0
     log.info("generation done: %d tokens in %.2fs (%.2f tok/s)", gen_count, elapsed, tps)
     await req.output_queue.put(None)
@@ -608,19 +667,34 @@ async def _lifespan(app: FastAPI):  # noqa: ARG001
     args = _cli_args or _parse_args()
     _model_id = args.model
 
+    # --- System info ---
+    total_mem, avail_mem = _get_system_memory_gb()
+    print(f"System memory: {total_mem:.1f} GB total, {avail_mem:.1f} GB available")
+
+    # --- Load model ---
     print(f"Loading model: {args.model}")
     t0 = time.perf_counter()
+    embed_dtype = getattr(args, "embed_dtype", None)
     if args.local_dir:
         bundle = HuggingFaceLoader.load_from_dir(
             args.local_dir, compute_dtype=args.compute_dtype,
+            embed_dtype=embed_dtype,
         )
     else:
         bundle = HuggingFaceLoader.load(
             args.model, compute_dtype=args.compute_dtype,
+            embed_dtype=embed_dtype,
         )
+
+    embed_gb = _weight_size_gb(bundle.embed_weights)
+    head_gb = _weight_size_gb(bundle.head_weights)
+    per_layer_mb = bundle.layers[0].nbytes / 1e6 if bundle.layers else 0
     print(f"  Architecture: {bundle.architecture}")
-    print(f"  Layers: {len(bundle.layers)}")
+    print(f"  Layers: {len(bundle.layers)} x {per_layer_mb:.0f} MB/layer (compute: {args.compute_dtype})")
+    print(f"  Embed weights: {embed_gb:.2f} GB  |  Head weights: {head_gb:.2f} GB  (dtype: {embed_dtype or args.compute_dtype})")
+    print(f"  Permanent RAM: {embed_gb + head_gb:.2f} GB")
     print(f"  Load time: {time.perf_counter() - t0:.2f}s")
+    print(f"  Process RSS: {_get_process_rss_gb():.2f} GB")
 
     executor = _create_executor(bundle)
     backend = _create_backend(args)
