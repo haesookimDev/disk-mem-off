@@ -8,7 +8,8 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _readback_device, _unpack_tensors, gelu, layer_norm, linear, np, softmax,
+    _ensure_f32, _readback_device, _unpack_tensors, gelu, layer_norm, linear,
+    np, softmax,
 )
 
 LAYER_TENSORS = [
@@ -81,7 +82,7 @@ class GPT2Executor:
         self, token_ids: list[int], wte: Any, wpe: Any,
     ) -> Any:
         seq_len = len(token_ids)
-        return wte[token_ids] + wpe[np.arange(seq_len)]
+        return _ensure_f32(wte[token_ids] + wpe[np.arange(seq_len)])
 
     def lm_head(
         self, hidden: Any, ln_f_w: Any, ln_f_b: Any, head_w: Any,

@@ -15,7 +15,7 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _readback_device, _unpack_tensors, linear_t, np, partial_rope,
+    _ensure_f32, _readback_device, _unpack_tensors, linear_t, np, partial_rope,
     repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
 )
 
@@ -242,7 +242,7 @@ class GLM4MoeExecutor:
     # -- Non-layer helpers --
 
     def embed(self, token_ids: list[int], embed_weights: Any) -> Any:
-        return embed_weights[token_ids]
+        return _ensure_f32(embed_weights[token_ids])
 
     def lm_head(self, hidden: Any, norm_w: Any, head_w: Any) -> Any:
         h = rms_norm(hidden, norm_w, self.rms_norm_eps)

@@ -33,6 +33,13 @@ def _readback_device(
     return buf
 
 
+def _ensure_f32(arr: Any) -> Any:
+    """Cast to float32 if needed (for float16/bfloat16 embed/head weights)."""
+    if arr.dtype != np.float32:
+        return arr.astype(np.float32)
+    return arr
+
+
 def _unpack_tensors(
     raw_bytes: bytes,
     tensor_meta: list[dict[str, Any]],
