@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 from typing import Any
 
 from .base import DeviceBackend
@@ -92,9 +91,8 @@ class MPSBackend(DeviceBackend):
                 f"Host buffer ({src.nbytes}B) smaller than device buffer ({dst.nbytes}B)"
             )
         mtl_buf = self._buffers[int(dst.handle)]
-        contents_ptr = mtl_buf.contents()
-        src_bytes = bytes(src.view[: dst.nbytes])
-        ctypes.memmove(contents_ptr, src_bytes, dst.nbytes)
+        device_mem = mtl_buf.contents().as_buffer(dst.nbytes)
+        device_mem[:] = bytes(src.view[: dst.nbytes])
         mtl_buf.didModifyRange_(Metal.NSRange(0, dst.nbytes))
 
     def copy_d2h_async(self, dst: HostBuffer, src: DeviceBuffer, stream: Any) -> None:
@@ -103,9 +101,8 @@ class MPSBackend(DeviceBackend):
                 f"Host buffer ({dst.nbytes}B) smaller than device buffer ({src.nbytes}B)"
             )
         mtl_buf = self._buffers[int(src.handle)]
-        contents_ptr = mtl_buf.contents()
-        raw = ctypes.string_at(contents_ptr, src.nbytes)
-        dst.view[: src.nbytes] = raw
+        device_mem = mtl_buf.contents().as_buffer(src.nbytes)
+        dst.view[: src.nbytes] = device_mem
 
     def record_event(self, stream: Any) -> Any:
         """Record an event using MTLEvent signal counter.
