@@ -427,16 +427,21 @@ async def _generate_tokens(
               len(token_ids), req.max_tokens, req.temperature, req.top_p)
     prompt_len = len(token_ids)
     for step in range(req.max_tokens):
-        next_token = await asyncio.to_thread(
-            _forward_step,
-            bundle,
-            runtime,
-            executor,
-            layer_ids,
-            token_ids,
-            req.temperature,
-            req.top_p,
-        )
+        try:
+            next_token = await asyncio.to_thread(
+                _forward_step,
+                bundle,
+                runtime,
+                executor,
+                layer_ids,
+                token_ids,
+                req.temperature,
+                req.top_p,
+            )
+        except Exception as exc:
+            log.error("forward step failed at step %d: %s", step, exc, exc_info=True)
+            await req.output_queue.put(exc)
+            return
         token_ids.append(next_token)
         await req.output_queue.put(next_token)
 
@@ -732,12 +737,21 @@ async def _lifespan(app: FastAPI):  # noqa: ARG001
 
     yield
 
+    # Graceful shutdown: wait for in-flight requests to finish
+    log.info("Shutting down: waiting for in-flight requests...")
+    try:
+        await asyncio.wait_for(_inference_queue.join(), timeout=30.0)
+    except asyncio.TimeoutError:
+        log.warning("Shutdown timeout: some requests may not have completed")
     worker.cancel()
     try:
         await worker
     except asyncio.CancelledError:
         pass
     runtime.close()
+    if hasattr(bundle.storage, "close"):
+        bundle.storage.close()
+    log.info("Shutdown complete.")
 
 
 app = FastAPI(title="disk-mem-off API", lifespan=_lifespan)

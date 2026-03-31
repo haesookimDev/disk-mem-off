@@ -2,7 +2,7 @@ from .backends import CUDABackend, DeviceBackend, MPSBackend, NullBackend, ROCmB
 from .buffer_pool import DeviceBufferPool
 from .executor import PassthroughExecutor
 from .pinned_pool import PinnedHostBufferPool
-from .quantize import CompositeDequantizer, Dequantizer, Float16Dequantizer, Int8Dequantizer
+from .quantize import BFloat16Dequantizer, CompositeDequantizer, Dequantizer, Float16Dequantizer, Int8Dequantizer
 from .runtime import LayerExecutor, LayerMetrics, OffloadRuntime, RuntimeMetrics
 from .scheduler import (
     BlockScheduler,
@@ -40,6 +40,7 @@ except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional depend
     SafetensorsStorage = None
 
 __all__ = [
+    "BFloat16Dequantizer",
     "BlockScheduler",
     "CompositeDequantizer",
     "CostAwareScheduler",

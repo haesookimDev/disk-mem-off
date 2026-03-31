@@ -24,6 +24,7 @@ class TestExports:
 
     def test_expected_public_api(self) -> None:
         expected = {
+            "BFloat16Dequantizer",
             "BlockScheduler",
             "CompositeDequantizer",
             "CostAwareScheduler",

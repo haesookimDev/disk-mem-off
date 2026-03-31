@@ -92,8 +92,13 @@ class CostAwareScheduler:
         return max(self.min_lookahead, min(lookahead, self.max_lookahead))
 
     def warmup_prefetch_ids(self, ordered_layer_ids: list[int]) -> list[int]:
-        """Prefetch first min_lookahead layers (cold start)."""
-        return ordered_layer_ids[: self.min_lookahead]
+        """Prefetch first layers on cold start.
+
+        Always prefetch at least 1 layer to avoid stalling on the very first
+        iteration when no cost data is available yet.
+        """
+        n = max(self.min_lookahead, 1) if not self._costs else self.min_lookahead
+        return ordered_layer_ids[:n]
 
     def next_prefetch_id(
         self, ordered_layer_ids: list[int], current_index: int

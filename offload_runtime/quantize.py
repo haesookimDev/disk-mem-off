@@ -75,11 +75,39 @@ class Float16Dequantizer:
         return HostBuffer(view=memoryview(bytearray(out_bytes)), pinned=False)
 
 
+class BFloat16Dequantizer:
+    """Dequantizes bfloat16 weights to float32.
+
+    Expects layer.metadata:
+      - "dtype": "bfloat16"
+    """
+
+    def needs_dequantize(self, layer: LayerSpec) -> bool:
+        return layer.metadata.get("dtype") == "bfloat16"
+
+    def decompressed_nbytes(self, layer: LayerSpec) -> int:
+        return layer.nbytes * 2  # bfloat16 -> float32
+
+    def dequantize(self, layer: LayerSpec, buf: HostBuffer) -> HostBuffer:
+        if np is not None:
+            bf16 = np.frombuffer(buf.view, dtype=np.uint16)
+            f32 = bf16.astype(np.uint32) << 16
+            result = f32.view(np.float32)
+            return HostBuffer(view=memoryview(result.tobytes()), pinned=False)
+        raw = buf.view.tobytes()
+        half_count = len(raw) // 2
+        values = struct.unpack(f"<{half_count}H", raw)
+        float_bytes = struct.pack(f"<{half_count}I", *(v << 16 for v in values))
+        return HostBuffer(view=memoryview(bytearray(float_bytes)), pinned=False)
+
+
 class CompositeDequantizer:
     """Dispatches to the correct dequantizer based on layer metadata."""
 
     def __init__(self, dequantizers: list[Any] | None = None) -> None:
-        self._dequantizers = dequantizers or [Int8Dequantizer(), Float16Dequantizer()]
+        self._dequantizers = dequantizers or [
+            Int8Dequantizer(), Float16Dequantizer(), BFloat16Dequantizer(),
+        ]
 
     def needs_dequantize(self, layer: LayerSpec) -> bool:
         return any(d.needs_dequantize(layer) for d in self._dequantizers)
