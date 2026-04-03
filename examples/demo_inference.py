@@ -169,6 +169,10 @@ def main() -> None:
 
         gen_time = time.perf_counter() - gen_start
 
+    # Clean up storage resources
+    if hasattr(bundle.storage, "close"):
+        bundle.storage.close()
+
     # --- Decode and print result ---
     print()
     print("=" * 60)

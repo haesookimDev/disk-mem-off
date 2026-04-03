@@ -30,6 +30,7 @@ def _readback_device(
     buf = bytearray(device_weights.nbytes)
     readback = HostBuffer(view=memoryview(buf), pinned=False)
     backend.copy_d2h_async(readback, device_weights, stream)
+    backend.synchronize_stream(stream)
     return buf
 
 
@@ -81,7 +82,12 @@ def gelu(x: Any) -> Any:
 
 
 def silu(x: Any) -> Any:
-    return x / (1.0 + np.exp(-x))
+    # Use np.where to avoid overflow in exp(-x) for large negative x.
+    # For x >= 0: x * sigmoid(x) = x / (1 + exp(-x))
+    # For x < 0: x * sigmoid(x) = x * exp(x) / (1 + exp(x))
+    pos = x / (1.0 + np.exp(-np.clip(x, -88, None)))
+    neg = x * np.exp(np.clip(x, None, 88)) / (1.0 + np.exp(np.clip(x, None, 88)))
+    return np.where(x >= 0, pos, neg)
 
 
 def softmax(x: Any, axis: int = -1) -> Any:

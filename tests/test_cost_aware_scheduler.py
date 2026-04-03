@@ -71,8 +71,16 @@ class TestCostAwareScheduler:
         sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
         assert sched.min_lookahead == 0
 
-    def test_min_lookahead_zero_warmup_empty(self) -> None:
+    def test_min_lookahead_zero_warmup_cold_start(self) -> None:
         sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
+        # Cold start (no cost data): always prefetch at least 1 to avoid stall
+        assert sched.warmup_prefetch_ids([0, 1, 2]) == [0]
+
+    def test_min_lookahead_zero_warmup_after_data(self) -> None:
+        sched = CostAwareScheduler(min_lookahead=0, max_lookahead=3)
+        # After cost data is available, respect min_lookahead=0
+        from offload_runtime.runtime import LayerMetrics
+        sched.feed_metrics([LayerMetrics(layer_id=0, h2d_ms=1.0, compute_ms=1.0)])
         assert sched.warmup_prefetch_ids([0, 1, 2]) == []
 
     def test_min_lookahead_zero_cold_returns_none(self) -> None:

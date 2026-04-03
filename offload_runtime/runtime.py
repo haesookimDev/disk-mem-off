@@ -85,6 +85,7 @@ class OffloadRuntime:
         if use_pinned_staging and backend.supports_pinned_host:
             self._pinned_pool = PinnedHostBufferPool(backend)
         self.dequantizer = dequantizer
+        self._closed = False
 
     def __enter__(self) -> "OffloadRuntime":
         return self
@@ -93,6 +94,9 @@ class OffloadRuntime:
         self.close()
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         if self._pinned_pool is not None:
             self._pinned_pool.drain()
         if self._pool is not None:
@@ -119,6 +123,8 @@ class OffloadRuntime:
         return pinned
 
     def run_inference(self, ordered_layer_ids: list[int], inputs: Any) -> tuple[Any, RuntimeMetrics]:
+        if self._closed:
+            raise RuntimeError("OffloadRuntime has been closed and cannot run inference")
         unknown = [lid for lid in ordered_layer_ids if lid not in self.layers]
         if unknown:
             raise ValueError(f"Unknown layer IDs: {unknown}")
@@ -195,4 +201,23 @@ class OffloadRuntime:
             self.backend.synchronize_stream(self.compute_stream)
 
         metrics.end_to_end_seconds = time.perf_counter() - wall_start
+
+        # Feed metrics back to adaptive schedulers (CostAware, ResourceAware)
+        if hasattr(self.scheduler, "feed_metrics"):
+            self.scheduler.feed_metrics(metrics.layer_metrics)
+        if hasattr(self.scheduler, "feed_feedback"):
+            from offload_runtime.scheduler.resource_context import LayerFeedback
+            feedback = [
+                LayerFeedback(
+                    layer_id=lm.layer_id,
+                    stall_ms=lm.stall_ms,
+                    disk_read_ms=lm.disk_read_ms,
+                    h2d_ms=lm.h2d_ms,
+                    compute_ms=lm.compute_ms,
+                    nbytes=lm.nbytes,
+                )
+                for lm in metrics.layer_metrics
+            ]
+            self.scheduler.feed_feedback(feedback)
+
         return activations, metrics

@@ -1,47 +1,68 @@
-현재 상태
-이 프로젝트는 저수준 메모리 오프로딩 프레임워크입니다. 모델 포맷 로더나 실제 연산 executor가 없기 때문에, 지금 바로 "모델을 넣고 추론 실행"하는 것은 불가능합니다.
+# 테스트 가이드
 
-현재 테스트할 수 있는 것:
+## 테스트 실행 방법
 
+**중요**: 반드시 `--extra dev` 플래그를 사용해야 프로젝트 가상환경에서 pytest가 실행됩니다.
 
-# 전체 테스트 (NullBackend + mock executor)
-uv run pytest tests/ -v
-이것은 파이프라인 흐름(prefetch → H2D → compute → free)을 검증하지만, 실제 GPU 연산은 하지 않습니다.
+```bash
+# 전체 테스트 실행 (권장)
+uv run --extra dev pytest tests/ -v
 
-실제 모델 추론을 테스트하려면
-3가지가 필요합니다:
+# 간결한 출력
+uv run --extra dev pytest tests/ -q
 
-1. 모델 가중치 (ShardedMMapStorage 포맷)
-ShardedMMapStorage가 기대하는 인덱스 JSON:
+# 특정 모듈만 테스트
+uv run --extra dev pytest tests/test_runtime.py -v
+uv run --extra dev pytest tests/test_executor_np.py -v
+```
 
+> **참고**: `uv run pytest`로 실행하면 별도의 도구 환경에서 pytest가 실행되어
+> numpy 등 프로젝트 의존성을 찾지 못해 대부분의 테스트가 skip됩니다.
 
-{
-  "layers": [
-    {"layer_id": 0, "path": "weights-000.bin", "offset": 0, "nbytes": 4096},
-    {"layer_id": 1, "path": "weights-000.bin", "offset": 4096, "nbytes": 4096}
-  ]
-}
-2. 실제 연산을 수행하는 LayerExecutor
-현재 PassthroughExecutor는 검증만 하고 activations를 그대로 통과시킵니다. 실제 모델에는 행렬 곱셈 등을 수행하는 executor가 필요합니다.
+## 현재 상태
 
-3. GPU 백엔드
-환경	백엔드	설치
-NVIDIA GPU	CUDABackend	uv pip install cuda-python
-AMD GPU	ROCmBackend	uv pip install hip-python
-Apple Silicon	MPSBackend	uv pip install pyobjc-framework-Metal
-추천하는 테스트 모델
-모델	크기	용도
-GPT-2 small	~500MB	가장 가볍고 검증 용이
-TinyLlama-1.1B	~2.2GB	VRAM 제한 시나리오 테스트에 적합
-Llama-2-7B	~14GB	실제 오프로딩이 필요한 현실적 케이스
-하지만 이 모델들을 사용하려면 safetensors/GGUF → shard format 변환기와 실제 LayerExecutor 구현이 먼저 필요합니다.
+- **245 passed, 15 skipped** (GPU 백엔드 미설치 환경 기준)
+- 15개 skip: CUDA, ROCm, MPS 백엔드 관련 테스트 (해당 하드웨어/드라이버 필요)
 
-All 5 phases are now complete. Here's a summary of what was fixed:
+## 테스트 범위
 
-offload_runtime/__init__.py — Removed orphaned duplicate __all__ list content (lines 70-101) that would have caused a SyntaxError.
+| 테스트 파일 | 대상 |
+|------------|------|
+| `test_runtime.py` | OffloadRuntime 핵심 루프, 메트릭, 버퍼 풀 |
+| `test_executor_np.py` | NumPy 수학 함수, 모델별 executor |
+| `test_executor.py` | PassthroughExecutor |
+| `test_scheduler.py` | LookaheadScheduler |
+| `test_block_scheduler.py` | BlockScheduler |
+| `test_cost_aware_scheduler.py` | CostAwareScheduler |
+| `test_resource_aware_scheduler.py` | ResourceAwareScheduler |
+| `test_reverse_scheduler.py` | ReverseLookaheadScheduler |
+| `test_storage.py` | ShardedMMapStorage |
+| `test_safetensors_storage.py` | SafetensorsStorage |
+| `test_backends.py` | NullBackend + CUDA |
+| `test_rocm_backend.py` | ROCmBackend |
+| `test_mps_backend.py` | MPSBackend |
+| `test_buffer_pool.py` | DeviceBufferPool |
+| `test_pinned_pool.py` | PinnedHostBufferPool |
+| `test_quantize.py` | INT8/FP16/BFloat16 Dequantizer |
+| `test_training.py` | TrainingRuntime (LoRA) |
+| `test_huggingface_loader.py` | HuggingFace 모델 로더 |
+| `test_integration_inference.py` | 엔드-투-엔드 추론 |
+| `test_exports.py` | 공개 API 계약 |
 
-tests/test_exports.py — Updated to match the new public API:
+## GPU 백엔드 테스트
 
-Renamed _optional_backends → _optional_exports to include all 8 optional symbols (3 backends + 5 inference symbols)
-Added GPT2Executor, LlamaExecutor, HuggingFaceLoader, ModelBundle, SafetensorsStorage to the expected set (34 → 39 symbols)
-Final test results: 190 passed, 15 skipped (up from 140 passed previously — 50 new tests from the inference implementation).
+| 환경 | 백엔드 | 설치 |
+|------|--------|------|
+| NVIDIA GPU | CUDABackend | `uv pip install cuda-python` |
+| AMD GPU | ROCmBackend | `uv pip install hip-python` |
+| Apple Silicon | MPSBackend | `uv pip install pyobjc-framework-Metal` |
+
+## 지원 모델
+
+| 모델 | 크기 | 용도 |
+|------|------|------|
+| GPT-2 small | ~500MB | 가장 가볍고 검증 용이 |
+| LLaMA 3.2 1B | ~2.2GB | VRAM 제한 시나리오 테스트 |
+| GLM-4 9B | ~18GB | 실제 오프로딩 케이스 |
+| GLM-4.7 MoE | ~159GB | MoE 아키텍처 테스트 |
+| Qwen3-Coder-Next | ~159GB | 하이브리드 아키텍처 테스트 |
