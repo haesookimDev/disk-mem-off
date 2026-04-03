@@ -6,6 +6,14 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import HostBuffer
 
 
+_POOL_ALIGNMENT = 256
+
+
+def _align_size(nbytes: int) -> int:
+    """Round up to nearest multiple of _POOL_ALIGNMENT for better pool reuse."""
+    return (nbytes + _POOL_ALIGNMENT - 1) & ~(_POOL_ALIGNMENT - 1)
+
+
 class PinnedHostBufferPool:
     """Reuses pinned host buffers of the same size to avoid frequent alloc/free."""
 
@@ -14,10 +22,11 @@ class PinnedHostBufferPool:
         self._free: dict[int, list[HostBuffer]] = defaultdict(list)
 
     def acquire(self, nbytes: int) -> HostBuffer:
-        pool = self._free.get(nbytes)
+        aligned = _align_size(nbytes)
+        pool = self._free.get(aligned)
         if pool:
             return pool.pop()
-        return self._backend.alloc_pinned_host(nbytes)
+        return self._backend.alloc_pinned_host(aligned)
 
     def release(self, buf: HostBuffer) -> None:
         self._free[buf.nbytes].append(buf)
