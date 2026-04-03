@@ -82,9 +82,10 @@ class ShardedMMapStorage:
         with self._lock:
             mm = self._mmap_for(entry.path)
         t0 = time.perf_counter()
-        data = bytes(mm[entry.offset : entry.offset + entry.nbytes])
+        buf = bytearray(entry.nbytes)
+        buf[:] = mm[entry.offset : entry.offset + entry.nbytes]
         self._disk_read_ms[layer_id] = (time.perf_counter() - t0) * 1000.0
-        return HostBuffer(view=memoryview(data), pinned=False)
+        return HostBuffer(view=memoryview(buf), pinned=False)
 
     def get_disk_read_ms(self, layer_id: int) -> float:
         return self._disk_read_ms.get(layer_id, 0.0)

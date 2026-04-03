@@ -82,12 +82,8 @@ def gelu(x: Any) -> Any:
 
 
 def silu(x: Any) -> Any:
-    # Use np.where to avoid overflow in exp(-x) for large negative x.
-    # For x >= 0: x * sigmoid(x) = x / (1 + exp(-x))
-    # For x < 0: x * sigmoid(x) = x * exp(x) / (1 + exp(x))
-    pos = x / (1.0 + np.exp(-np.clip(x, -88, None)))
-    neg = x * np.exp(np.clip(x, None, 88)) / (1.0 + np.exp(np.clip(x, None, 88)))
-    return np.where(x >= 0, pos, neg)
+    cx = np.clip(x, -88, 88)
+    return x * (1.0 / (1.0 + np.exp(-cx)))
 
 
 def softmax(x: Any, axis: int = -1) -> Any:
@@ -109,6 +105,20 @@ def linear_t(x: Any, weight: Any) -> Any:
     return x @ weight.T
 
 
+_rope_cache: dict[tuple[int, int, float], tuple[Any, Any]] = {}
+_causal_mask_cache: dict[int, Any] = {}
+
+
+def causal_mask(seq_len: int) -> Any:
+    """Return a cached upper-triangular causal mask for attention."""
+    cached = _causal_mask_cache.get(seq_len)
+    if cached is not None:
+        return cached
+    mask = np.triu(np.full((seq_len, seq_len), -1e10, dtype=np.float32), k=1)
+    _causal_mask_cache[seq_len] = mask
+    return mask
+
+
 def rope(
     q: Any, k: Any, positions: Any, head_dim: int, base: float = 10000.0,
 ) -> tuple[Any, Any]:
@@ -118,10 +128,18 @@ def rope(
     positions: [seq_len]
     """
     half_dim = head_dim // 2
-    freqs = 1.0 / (base ** (np.arange(0, half_dim, dtype=np.float64) / half_dim))
-    angles = np.outer(positions.astype(np.float64), freqs).astype(np.float32)
-    cos_vals = np.cos(angles)  # [seq_len, half_dim]
-    sin_vals = np.sin(angles)
+    seq_len = len(positions)
+    cache_key = (seq_len, head_dim, base)
+
+    cached = _rope_cache.get(cache_key)
+    if cached is not None:
+        cos_vals, sin_vals = cached
+    else:
+        freqs = 1.0 / (base ** (np.arange(0, half_dim, dtype=np.float32) / half_dim))
+        angles = np.outer(positions, freqs)
+        cos_vals = np.cos(angles)  # [seq_len, half_dim]
+        sin_vals = np.sin(angles)
+        _rope_cache[cache_key] = (cos_vals, sin_vals)
 
     def _rotate(x: Any) -> Any:
         x1 = x[..., :half_dim]

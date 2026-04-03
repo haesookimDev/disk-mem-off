@@ -8,8 +8,8 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _ensure_f32, _readback_device, _unpack_tensors, gelu, layer_norm, linear,
-    np, softmax,
+    _ensure_f32, _readback_device, _unpack_tensors, causal_mask, gelu,
+    layer_norm, linear, np, softmax,
 )
 
 LAYER_TENSORS = [
@@ -59,8 +59,7 @@ class GPT2Executor:
         v = v.reshape(seq_len, n_head, head_dim).transpose(1, 0, 2)
 
         scores = (q @ k.transpose(0, 2, 1)) / math.sqrt(head_dim)
-        mask = np.triu(np.full((seq_len, seq_len), -1e10, dtype=np.float32), k=1)
-        scores = scores + mask
+        scores = scores + causal_mask(seq_len)
         attn_w = softmax(scores, axis=-1)
         attn_out = attn_w @ v
 

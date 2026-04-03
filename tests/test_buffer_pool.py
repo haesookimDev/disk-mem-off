@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from offload_runtime.backends.null_backend import NullBackend
-from offload_runtime.buffer_pool import DeviceBufferPool
+from offload_runtime.buffer_pool import DeviceBufferPool, _align_size
 
 
 class TestDeviceBufferPool:
@@ -11,7 +11,7 @@ class TestDeviceBufferPool:
 
     def test_acquire_allocates_new(self) -> None:
         buf = self.pool.acquire(64)
-        assert buf.nbytes == 64
+        assert buf.nbytes == _align_size(64)
         assert buf.backend == "null"
 
     def test_release_and_reuse(self) -> None:
@@ -23,10 +23,10 @@ class TestDeviceBufferPool:
         assert buf2.handle == handle1  # reused same buffer
 
     def test_different_sizes_not_reused(self) -> None:
-        buf1 = self.pool.acquire(32)
+        buf1 = self.pool.acquire(256)
         self.pool.release(buf1)
 
-        buf2 = self.pool.acquire(64)
+        buf2 = self.pool.acquire(512)
         assert buf2.handle != buf1.handle  # different size, new allocation
 
     def test_drain_frees_all(self) -> None:

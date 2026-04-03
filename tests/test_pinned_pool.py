@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from offload_runtime.backends.null_backend import NullBackend
-from offload_runtime.pinned_pool import PinnedHostBufferPool
+from offload_runtime.pinned_pool import PinnedHostBufferPool, _align_size
 
 
 class TestPinnedHostBufferPool:
@@ -12,7 +12,7 @@ class TestPinnedHostBufferPool:
     def test_acquire_allocates_pinned(self) -> None:
         buf = self.pool.acquire(64)
         assert buf.pinned is True
-        assert buf.nbytes == 64
+        assert buf.nbytes == _align_size(64)
 
     def test_release_and_reuse(self) -> None:
         buf1 = self.pool.acquire(64)
@@ -23,11 +23,11 @@ class TestPinnedHostBufferPool:
         assert buf2.view.obj is obj1  # reused same underlying buffer
 
     def test_different_sizes_not_reused(self) -> None:
-        buf1 = self.pool.acquire(32)
+        buf1 = self.pool.acquire(256)
         self.pool.release(buf1)
 
-        buf2 = self.pool.acquire(64)
-        assert buf2.nbytes == 64
+        buf2 = self.pool.acquire(512)
+        assert buf2.nbytes == _align_size(512)
         assert buf2.view.obj is not buf1.view.obj
 
     def test_drain(self) -> None:

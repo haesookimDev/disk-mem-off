@@ -14,8 +14,8 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _ensure_f32, _readback_device, _unpack_tensors, linear_t, np, partial_rope,
-    repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
+    _ensure_f32, _readback_device, _unpack_tensors, causal_mask, linear_t, np,
+    partial_rope, repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
 )
 
 
@@ -74,22 +74,17 @@ def _gated_delta_rule_recurrence(
     v = v.reshape(seq_len, num_heads, head_dim_v)
     beta = beta.reshape(seq_len, num_heads, head_dim_k)
 
+    # Pre-compute all decay factors and bk products in bulk
+    decay_all = np.exp(g)  # [seq_len, num_heads]
+    bk_all = beta * k  # [seq_len, num_heads, head_dim_k]
+
     # State: [num_heads, head_dim_v, head_dim_k]
     S = np.zeros((num_heads, head_dim_v, head_dim_k), dtype=q.dtype)
     output = np.zeros((seq_len, num_heads, head_dim_v), dtype=q.dtype)
 
     for t_idx in range(seq_len):
-        # Decay factor: exp(g_t) per head → broadcast to state shape
-        decay = np.exp(g[t_idx])  # [num_heads]
-        S = S * decay[:, None, None]
-
-        # Update: outer product of v_t and (beta_t * k_t)
-        bk = beta[t_idx] * k[t_idx]  # [num_heads, head_dim_k]
-        # v_t: [num_heads, head_dim_v], bk: [num_heads, head_dim_k]
-        # outer per head: [num_heads, head_dim_v, head_dim_k]
-        S = S + v[t_idx, :, :, None] * bk[:, None, :]
-
-        # Output: S @ q_t → [num_heads, head_dim_v]
+        S *= decay_all[t_idx, :, None, None]
+        S += v[t_idx, :, :, None] * bk_all[t_idx, :, None, :]
         output[t_idx] = np.einsum("hvk,hk->hv", S, q[t_idx])
 
     return output.reshape(seq_len, num_heads * head_dim_v)
@@ -198,8 +193,7 @@ class Qwen3NextExecutor:
 
         # Scaled dot-product attention
         scores = (q @ k.transpose(0, 2, 1)) / math.sqrt(head_dim)
-        mask = np.triu(np.full((seq_len, seq_len), -1e10, dtype=np.float32), k=1)
-        scores = scores + mask
+        scores = scores + causal_mask(seq_len)
         attn_w = softmax(scores, axis=-1)
         attn_out = attn_w @ v
 
@@ -292,7 +286,7 @@ class Qwen3NextExecutor:
         if self.norm_topk_prob:
             topk_weights = topk_weights / (topk_weights.sum(axis=-1, keepdims=True) + 1e-20)
 
-        # --- Expert computation ---
+        # --- Expert computation (vectorized scatter-add) ---
         output = np.zeros_like(h)
         active_experts = set(topk_indices.ravel().tolist())
 
@@ -312,10 +306,10 @@ class Qwen3NextExecutor:
             up_out = linear_t(expert_input, up_w)
             expert_out = linear_t(gate_out * up_out, down_w)
 
-            token_indices = np.where(token_mask)[0]
-            for local_i, tok_i in enumerate(token_indices):
-                w = topk_weights[tok_i][mask[tok_i]].sum()
-                output[tok_i] += w * expert_out[local_i]
+            # Vectorized weighted scatter: sum weights per token for this expert
+            token_indices_arr = np.where(token_mask)[0]
+            weights_per_token = (topk_weights[token_mask] * mask[token_mask]).sum(axis=-1)  # [n_tokens]
+            output[token_indices_arr] += weights_per_token[:, None] * expert_out
 
         # --- Shared expert with sigmoid gate ---
         if "mlp.shared_expert.gate_proj.weight" in t:

@@ -15,8 +15,8 @@ from offload_runtime.backends.base import DeviceBackend
 from offload_runtime.types import DeviceBuffer, LayerSpec
 
 from ._common import (
-    _ensure_f32, _readback_device, _unpack_tensors, linear_t, np, partial_rope,
-    repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
+    _ensure_f32, _readback_device, _unpack_tensors, causal_mask, linear_t, np,
+    partial_rope, repeat_kv, rms_norm, rms_norm_no_weight, rope, silu, softmax,
 )
 
 # Dense layers (first_k_dense_replace) use these tensors.
@@ -152,8 +152,7 @@ class GLM4MoeExecutor:
 
         # Scaled dot-product attention
         scores = (q @ k.transpose(0, 2, 1)) / math.sqrt(head_dim)
-        mask = np.triu(np.full((seq_len, seq_len), -1e10, dtype=np.float32), k=1)
-        scores = scores + mask
+        scores = scores + causal_mask(seq_len)
         attn_w = softmax(scores, axis=-1)
         attn_out = attn_w @ v
 
@@ -199,14 +198,15 @@ class GLM4MoeExecutor:
             topk_weights = topk_weights / (topk_weights.sum(axis=-1, keepdims=True) + 1e-20)
         topk_weights = topk_weights * self.routed_scaling_factor
 
-        # --- Expert computation ---
+        # --- Expert computation (vectorized scatter-add) ---
         output = np.zeros_like(h)
 
         # Collect unique experts that need computation
         active_experts = set(topk_indices.ravel().tolist())
 
+        # Pre-compute per-expert weight sums: for each (token, expert) pair,
+        # sum the weights across all top-k slots that selected that expert.
         for expert_idx in active_experts:
-            # Which tokens route to this expert, and their weights
             mask = (topk_indices == expert_idx)  # [seq_len, k]
             token_mask = mask.any(axis=-1)  # [seq_len]
             if not token_mask.any():
@@ -223,12 +223,10 @@ class GLM4MoeExecutor:
             up_out = linear_t(expert_input, up_w)
             expert_out = linear_t(gate_out * up_out, down_w)  # [n_tokens, hidden]
 
-            # Scatter weighted expert output back
-            token_indices = np.where(token_mask)[0]
-            for local_i, tok_i in enumerate(token_indices):
-                # Sum weights for this expert across all top-k slots
-                w = topk_weights[tok_i][mask[tok_i]].sum()
-                output[tok_i] += w * expert_out[local_i]
+            # Vectorized weighted scatter: sum weights per token for this expert
+            token_indices_arr = np.where(token_mask)[0]
+            weights_per_token = (topk_weights[token_mask] * mask[token_mask]).sum(axis=-1)  # [n_tokens]
+            output[token_indices_arr] += weights_per_token[:, None] * expert_out
 
         # --- Shared expert (always active) ---
         if "mlp.shared_experts.gate_proj.weight" in t:
